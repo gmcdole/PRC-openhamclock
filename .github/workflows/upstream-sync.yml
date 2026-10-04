@@ -1,0 +1,132 @@
+# PRC fork only: nightly, pull in new changes from the original project
+# (accius/openhamclock main) WITHOUT losing our Patriot Radio Club changes.
+#
+#   - Nothing new upstream            -> does nothing.
+#   - Merges cleanly, our PRC changes
+#     still present, build + tests OK -> pushes to main and starts the
+#                                        container image build. iffweb02 then
+#                                        deploys it on its own (iff-ohc-autodeploy).
+#   - Conflict, a PRC change missing,
+#     or any check fails              -> NOTHING is pushed; this run fails (red)
+#                                        and iffweb02's nightly check emails us.
+#
+# Run it by hand from the Actions tab; tick "run_checks_anyway" to run the
+# full checks even when upstream has nothing new (a test, pushes nothing).
+
+name: Upstream sync (PRC fork)
+
+on:
+  schedule:
+    - cron: '17 5 * * *' # 05:17 UTC daily = 10:17 pm Arizona
+  workflow_dispatch:
+    inputs:
+      run_checks_anyway:
+        description: 'Run all checks even if upstream has nothing new (test only, pushes nothing)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the merge to main
+  actions: write # start the container image build
+
+jobs:
+  sync:
+    if: github.repository == 'gmcdole/PRC-openhamclock'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out our main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Look for new upstream changes
+        id: check
+        run: |
+          git remote add upstream https://github.com/accius/openhamclock.git
+          git fetch --no-tags upstream main
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          echo "Our main is $BEHIND commit(s) behind accius/openhamclock main." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge upstream (on the runner only, nothing pushed yet)
+        id: merge
+        if: steps.check.outputs.behind != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git merge --no-edit -m "Auto-merge upstream accius/openhamclock main (${{ steps.check.outputs.upstream_sha }})" upstream/main; then
+            echo "Merged cleanly." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "CONFLICT with our PRC changes - nothing pushed. Files:" | tee -a "$GITHUB_STEP_SUMMARY"
+            git diff --name-only --diff-filter=U | tee -a "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Confirm every PRC change is still in the source
+        if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
+        run: |
+          need() { # file, fixed text, what it is
+            if grep -qF -- "$2" "$1"; then echo "OK      $3"; else echo "MISSING $3 ($1)"; fi
+          }
+          {
+          need src/components/DonateButton.jsx 'https://square.link/u/H9HA3PjU' 'Square donate link'
+          need src/components/DonateButton.jsx 'XSXCMP8NMGL5G' 'PRC PayPal donate link'
+          need src/components/DonateButton.jsx 'Support the Patriot Radio Club' 'Support window title'
+          need index.html 'https://openhamclock.patriotradio.club/' 'canonical / SEO tags'
+          need public/robots.txt 'openhamclock.patriotradio.club' 'robots.txt points to our site'
+          need public/sitemap.xml 'openhamclock.patriotradio.club' 'sitemap points to our site'
+          need src/components/WorldMap.jsx "storedSettings.mapProjection || 'globe3d'" 'globe is the default map'
+          need src/components/Globe3D.jsx 'kickIdleTimer(userMovedRef.current ? AUTOROTATE_IDLE_MS : 0)' 'globe spins on first load'
+          need server/routes/config-routes.js "const tz = process.env.TZ || '';" 'visitor local time zone'
+          } > "$RUNNER_TEMP/prc-check.txt"
+          cat "$RUNNER_TEMP/prc-check.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          if grep -q '^MISSING' "$RUNNER_TEMP/prc-check.txt"; then
+            echo "A PRC change is missing - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Set up Node.js 22
+        if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+
+      - name: Install, build and test
+        if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1' # desktop app binary not needed for the web build
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          npx vitest run
+          npm run format:check
+          npm run lang:check
+          echo "Install, build, tests, format and language checks passed." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Confirm PRC changes made it into the built site
+        if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
+        run: |
+          for t in 'square.link/u/H9HA3PjU' 'XSXCMP8NMGL5G' 'Support the Patriot Radio Club'; do
+            grep -rqF -- "$t" dist/ || { echo "Built site is missing: $t - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          done
+          grep -qF 'https://openhamclock.patriotradio.club/' dist/index.html || { echo "Built index.html lost our tags - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          echo "Built site still has the PRC donate options and tags." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish (push to main and start the image build)
+        if: steps.check.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fails (and pushes nothing) if upstream changed workflow files; that needs a person.
+          git push origin HEAD:main
+          # A push made by this job does not start other workflows by itself, so start the build.
+          gh workflow run docker-openhamclock.yml --ref main
+          echo "Pushed $(git rev-parse --short HEAD) to main and started the container image build." | tee -a "$GITHUB_STEP_SUMMARY"
