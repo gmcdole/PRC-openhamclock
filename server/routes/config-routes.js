@@ -286,11 +286,12 @@ module.exports = function (app, ctx) {
       // Whether config is incomplete (show setup wizard)
       configIncomplete: CONFIG.callsign === 'N0CALL' || !CONFIG.gridSquare,
 
-      // Server timezone (from TZ env var or system), validated.
-      // On minimal Linux containers without TZ set, Intl can return "Etc/Unknown"
-      // which browsers reject with RangeError. Validate before sending.
+      // Server timezone, only when TZ is set explicitly, validated. Unset sends ''
+      // so each visitor's browser uses its own zone (as .env.example documents);
+      // falling back to the system zone would show a container's UTC as every
+      // visitor's local time on a hosted instance.
       timezone: (() => {
-        const tz = process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        const tz = process.env.TZ || '';
         if (!tz) return '';
         try {
           new Intl.DateTimeFormat(undefined, { timeZone: tz });
