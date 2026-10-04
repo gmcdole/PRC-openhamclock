@@ -188,13 +188,13 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                     letterSpacing: '0.5px',
                   }}
                 >
-                  Merch Store
+                  Support the OpenHamClock software
                 </div>
                 <a
                   href={MERCH_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label="OpenHamClock Merch — shirts, mugs, stickers and more (opens in new tab)"
+                  aria-label="OpenHamClock Merch — supports the open-source OpenHamClock project, not the Patriot Radio Club (opens in new tab)"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -216,7 +216,7 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                   <div>
                     <div>OpenHamClock Merch</div>
                     <div style={{ fontSize: '11px', fontWeight: '400', color: 'var(--text-muted, #aaa)' }}>
-                      Shirts, mugs, stickers & more
+                      Supports the open-source OpenHamClock project
                     </div>
                   </div>
                 </a>
