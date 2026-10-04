@@ -1,9 +1,9 @@
-# OpenHamClock - https://openhamclock.com
-# The original free amateur radio dashboard by K0CJH
+# PRC Open HamClock - https://openhamclock.patriotradio.club/
+# Hosted by the Patriot Radio Club (K1PRC). Based on OpenHamClock by K0CJH (https://github.com/accius/openhamclock)
 
 User-agent: *
 Allow: /
 Disallow: /api/
 Disallow: /assets/
 
-Sitemap: https://openhamclock.com/sitemap.xml
+Sitemap: https://openhamclock.patriotradio.club/sitemap.xml

@@ -1,11 +1,11 @@
 /**
  * DonateButton — single "Support Us" button that opens a modal
- * with PayPal, Buy Me a Coffee, and merch store links.
+ * with Square, PayPal, and merch store links.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 
-const PAYPAL_URL = 'https://www.paypal.com/donate/?hosted_button_id=MMYPQBLA6SW68';
-const COFFEE_URL = 'https://buymeacoffee.com/k0cjh';
+const SQUARE_URL = 'https://square.link/u/H9HA3PjU';
+const PAYPAL_URL = 'https://www.paypal.com/donate/?hosted_button_id=XSXCMP8NMGL5G';
 const MERCH_URL = 'https://openhamclock.printify.me';
 
 export default function DonateButton({ compact = false, fontSize = '12px', padding = '6px 10px', tabIndex }) {
@@ -28,8 +28,8 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Support OpenHamClock"
-        title="Support OpenHamClock"
+        aria-label="Support the Patriot Radio Club"
+        title="Support the Patriot Radio Club"
         tabIndex={tabIndex}
         style={{
           background: 'linear-gradient(135deg, #ff813f 0%, #ffdd00 100%)',
@@ -86,7 +86,7 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
               style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}
             >
               <h3 id="donate-modal-title" style={{ margin: 0, color: 'var(--text-primary, #eee)', fontSize: '18px' }}>
-                Support OpenHamClock
+                Support the Patriot Radio Club
               </h3>
               <button
                 type="button"
@@ -110,24 +110,25 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
             <p
               style={{ color: 'var(--text-secondary, #aaa)', fontSize: '13px', margin: '0 0 20px 0', lineHeight: 1.5 }}
             >
-              OpenHamClock is free and open-source. Your support helps cover hosting costs and fund new features. 73!
+              This club clock is provided free by the Patriot Radio Club (K1PRC). Your donation helps keep it and the
+              club's other services running. Thank you, and 73!
             </p>
 
             {/* Donate options */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <a
-                href={COFFEE_URL}
+                href={SQUARE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="Buy Me a Coffee — one-time or monthly support (opens in new tab)"
+                aria-label="Donate via Square — secure online donation (opens in new tab)"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
                   padding: '14px 16px',
                   borderRadius: '8px',
-                  background: 'linear-gradient(135deg, #ff813f 0%, #ffdd00 100%)',
-                  color: '#000',
+                  background: 'linear-gradient(135deg, #3e4348 0%, #000000 100%)',
+                  color: '#fff',
                   textDecoration: 'none',
                   fontWeight: '600',
                   fontSize: '14px',
@@ -136,10 +137,10 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                 onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
                 onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
               >
-                <span style={{ fontSize: '22px' }}>☕</span>
+                <span style={{ fontSize: '22px' }}>💵</span>
                 <div>
-                  <div>Buy Me a Coffee</div>
-                  <div style={{ fontSize: '11px', fontWeight: '400', opacity: 0.8 }}>One-time or monthly support</div>
+                  <div>Donate via Square</div>
+                  <div style={{ fontSize: '11px', fontWeight: '400', opacity: 0.8 }}>Secure online donation</div>
                 </div>
               </a>
 
@@ -187,13 +188,13 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                     letterSpacing: '0.5px',
                   }}
                 >
-                  Merch Store
+                  Support the OpenHamClock software
                 </div>
                 <a
                   href={MERCH_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label="OpenHamClock Merch — shirts, mugs, stickers and more (opens in new tab)"
+                  aria-label="OpenHamClock Merch — supports the open-source OpenHamClock project, not the Patriot Radio Club (opens in new tab)"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -215,7 +216,7 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                   <div>
                     <div>OpenHamClock Merch</div>
                     <div style={{ fontSize: '11px', fontWeight: '400', color: 'var(--text-muted, #aaa)' }}>
-                      Shirts, mugs, stickers & more
+                      Supports the open-source OpenHamClock project
                     </div>
                   </div>
                 </a>
