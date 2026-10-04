@@ -618,7 +618,7 @@ export const WorldMap = ({
   const migratedStyle = storedSettings.isAzimuthal ? 'dark' : savedStyle || 'dark';
   // Validate style exists and isn't the legacy 'azimuthal' canvas entry
   const initialStyle = MAP_STYLES[migratedStyle] && !MAP_STYLES[migratedStyle].legacy ? migratedStyle : 'dark';
-  const initialProjection = storedSettings.isAzimuthal ? 'azimuthal' : storedSettings.mapProjection || 'mercator';
+  const initialProjection = storedSettings.isAzimuthal ? 'azimuthal' : storedSettings.mapProjection || 'globe3d';
   const [mapStyle, setMapStyle] = useState(initialStyle);
   const [mapRotationConfig, setMapRotationConfig] = useState(() => {
     try {

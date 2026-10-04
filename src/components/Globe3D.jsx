@@ -448,10 +448,11 @@ export default function Globe3D({
   // with the current value instead of snapping back to the material default.
   const nightDarknessRef = useRef(nightDarkness);
   // Screensaver machinery: `autoRotate` state means the feature is enabled;
-  // actual rotation only engages after AUTOROTATE_IDLE_MS without interaction.
+  // actual rotation only engages after AUTOROTATE_IDLE_MS without interaction
+  // (or after `delay`, e.g. 0 to spin straight away on first load).
   const autoRotateEnabledRef = useRef(true);
   const idleTimerRef = useRef(0);
-  const kickIdleTimer = useCallback(() => {
+  const kickIdleTimer = useCallback((delay = AUTOROTATE_IDLE_MS) => {
     clearTimeout(idleTimerRef.current);
     const s = gl.current;
     if (s.controls) s.controls.autoRotate = false;
@@ -462,7 +463,7 @@ export default function Globe3D({
         s2.controls.autoRotate = true;
         s2.requestRender?.(); // loop is parked by now; nudge it back to life
       }
-    }, AUTOROTATE_IDLE_MS);
+    }, delay);
   }, []);
   const [textureLoading, setTextureLoading] = useState(true);
   // One-way per-session detail upgrade: once the camera has been close enough
@@ -1082,8 +1083,10 @@ export default function Globe3D({
     try {
       localStorage.setItem(AUTOROTATE_KEY, String(autoRotate));
     } catch {}
-    // Enabling arms the 30 s clock; disabling stops any rotation immediately.
-    kickIdleTimer();
+    // Until the user first drags/zooms the globe, enabling spins immediately
+    // (so it turns from page load); after that, enabling arms the 30 s clock.
+    // Disabling stops any rotation immediately.
+    kickIdleTimer(userMovedRef.current ? AUTOROTATE_IDLE_MS : 0);
     return () => clearTimeout(idleTimerRef.current);
   }, [autoRotate, kickIdleTimer]);
 
