@@ -148,7 +148,7 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                 href={PAYPAL_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                aria-label="Donate via PayPal — secure one-time donation (opens in new tab)"
+                aria-label="Donate via PayPal — secure online donation (opens in new tab)"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -168,7 +168,7 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                 <span style={{ fontSize: '22px' }}>💳</span>
                 <div>
                   <div>Donate via PayPal</div>
-                  <div style={{ fontSize: '11px', fontWeight: '400', opacity: 0.8 }}>Secure one-time donation</div>
+                  <div style={{ fontSize: '11px', fontWeight: '400', opacity: 0.8 }}>Secure online donation</div>
                 </div>
               </a>
 
