@@ -11,7 +11,9 @@
 #                                        and iffweb02's nightly check emails us.
 #
 # Run it by hand from the Actions tab; tick "run_checks_anyway" to run the
-# full checks even when upstream has nothing new (a test, pushes nothing).
+# full checks even when upstream has nothing new. That is a test and pushes
+# nothing ONLY while upstream has nothing new; if upstream has new commits,
+# a manual run merges and publishes them exactly like the nightly run.
 
 name: Upstream sync (PRC fork)
 
@@ -21,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       run_checks_anyway:
-        description: 'Run all checks even if upstream has nothing new (test only, pushes nothing)'
+        description: 'Run all checks even if upstream has nothing new (pushes nothing then; new upstream commits are published as usual)'
         type: boolean
         default: false
 
