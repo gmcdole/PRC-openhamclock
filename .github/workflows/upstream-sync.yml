@@ -124,6 +124,7 @@ jobs:
         if: steps.check.outputs.behind != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }} # gh would otherwise pick the 'upstream' remote (accius)
         run: |
           # Fails (and pushes nothing) if upstream changed workflow files; that needs a person.
           git push origin HEAD:main
