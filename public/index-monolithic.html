@@ -3,31 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenHamClock - Amateur Radio Dashboard | Live DX Cluster, Propagation, Band Conditions</title>
+  <title>PRC Open HamClock | Live Ham Radio Clock by the Patriot Radio Club</title>
   
   <!-- SEO Meta -->
-  <meta name="description" content="OpenHamClock is a free, real-time amateur radio dashboard with live DX cluster spots, PSK Reporter, Reverse Beacon Network, POTA/SOTA tracking, propagation predictions, solar indices, band conditions, satellite passes, and an interactive world map. Runs on any browser — desktop, Raspberry Pi, tablet, or phone. No login, no ads, no subscription.">
-  <meta name="keywords" content="ham clock, hamclock, openhamclock, open ham clock, amateur radio dashboard, ham radio dashboard, DX cluster, DX spots, PSK Reporter, Reverse Beacon Network, RBN, POTA tracker, SOTA tracker, propagation prediction, band conditions, solar flux, K-index, sunspot number, space weather, ham radio map, great circle map, satellite tracker, amateur radio, ham radio, shortwave, HF propagation, MUF map, gray line, greyline, VOACAP, ham radio tools, free ham radio software, web ham clock, raspberry pi ham clock">
-  <meta name="author" content="Chris Hetherington, K0CJH">
+  <meta name="description" content="Free live ham radio dashboard from the Patriot Radio Club (K1PRC): spinning 3D globe, DX cluster spots, POTA/SOTA activations, band conditions, space weather and propagation. Make it yours with your own call sign.">
+  <meta name="keywords" content="PRC Open HamClock, Patriot Radio Club, K1PRC, ham clock, hamclock, openhamclock, open ham clock, amateur radio dashboard, ham radio dashboard, DX cluster, DX spots, PSK Reporter, Reverse Beacon Network, RBN, POTA tracker, SOTA tracker, propagation prediction, band conditions, solar flux, K-index, sunspot number, space weather, ham radio map, great circle map, satellite tracker, amateur radio, ham radio, shortwave, HF propagation, MUF map, gray line, greyline, VOACAP, ham radio tools, free ham radio software, web ham clock, raspberry pi ham clock">
+  <meta name="author" content="Patriot Radio Club">
   <meta name="robots" content="index, follow">
-  <link rel="canonical" href="https://openhamclock.com/">
+  <link rel="canonical" href="https://openhamclock.patriotradio.club/">
 
   <!-- Open Graph (Facebook, Discord, iMessage, etc.) -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://openhamclock.com/">
-  <meta property="og:title" content="OpenHamClock - Free Amateur Radio Dashboard">
-  <meta property="og:description" content="Live DX cluster spots, PSK Reporter, RBN skimmer data, POTA/SOTA tracking, propagation predictions, solar indices, band conditions, satellite passes, and an interactive world map — all in one free browser-based dashboard. No login, no ads.">
-  <meta property="og:image" content="https://openhamclock.com/icons/og-image.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:site_name" content="OpenHamClock">
+  <meta property="og:url" content="https://openhamclock.patriotradio.club/">
+  <meta property="og:title" content="PRC Open HamClock | Live Ham Radio Clock by the Patriot Radio Club">
+  <meta property="og:description" content="Free live ham radio dashboard from the Patriot Radio Club (K1PRC): spinning 3D globe, DX cluster spots, POTA/SOTA activations, band conditions, space weather and propagation. Make it yours with your own call sign.">
+  <meta property="og:image" content="https://patriotradio.club/wp-content/uploads/2025/09/Ham-Radio.jpg">
+  <meta property="og:image:width" content="612">
+  <meta property="og:image:height" content="407">
+  <meta property="og:image:alt" content="Patriot Radio Club - PRC Open HamClock">
+  <meta property="og:site_name" content="Patriot Radio Club">
   <meta property="og:locale" content="en_US">
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="OpenHamClock - Free Amateur Radio Dashboard">
-  <meta name="twitter:description" content="Live DX spots, PSK Reporter, RBN, POTA/SOTA, propagation, solar data, satellites, and world map — free for every ham. No login, no ads.">
-  <meta name="twitter:image" content="https://openhamclock.com/icons/og-image.png">
+  <meta name="twitter:title" content="PRC Open HamClock | Live Ham Radio Clock by the Patriot Radio Club">
+  <meta name="twitter:description" content="Free live ham radio dashboard from the Patriot Radio Club (K1PRC): spinning 3D globe, DX cluster spots, POTA/SOTA activations, band conditions, space weather and propagation. Make it yours with your own call sign.">
+  <meta name="twitter:image" content="https://patriotradio.club/wp-content/uploads/2025/09/Ham-Radio.jpg">
 
   <!-- Favicons (cache-bust with version) -->
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=1">
@@ -48,10 +49,10 @@
   {
     "@context": "https://schema.org",
     "@type": "WebApplication",
-    "name": "OpenHamClock",
+    "name": "PRC Open HamClock",
     "alternateName": ["Ham Clock", "HamClock", "Open Ham Clock", "Open HamClock"],
-    "url": "https://openhamclock.com",
-    "description": "Free, real-time amateur radio operations dashboard with live DX cluster spots, PSK Reporter decodes, Reverse Beacon Network data, POTA/SOTA activator tracking, satellite passes, propagation predictions, solar indices, band conditions, space weather, and an interactive world map with great circle paths.",
+    "url": "https://openhamclock.patriotradio.club/",
+    "description": "Free live ham radio dashboard from the Patriot Radio Club (K1PRC): spinning 3D globe, DX cluster spots, POTA/SOTA activations, band conditions, space weather and propagation. Make it yours with your own call sign.",
     "applicationCategory": "UtilitiesApplication",
     "operatingSystem": "Any (Web Browser)",
     "browserRequirements": "Requires a modern web browser",
@@ -61,18 +62,33 @@
       "priceCurrency": "USD"
     },
     "author": {
-      "@type": "Person",
-      "name": "Chris Hetherington",
-      "callSign": "K0CJH"
+      "@type": "Organization",
+      "name": "Patriot Radio Club",
+      "url": "https://patriotradio.club/"
     },
-    "sameAs": [
-      "https://github.com/accius/openhamclock",
-      "https://www.facebook.com/groups/1217043013897440",
-      "https://www.reddit.com/r/OpenHamClock/"
-    ],
+    "publisher": {
+      "@type": "Organization",
+      "name": "Patriot Radio Club",
+      "url": "https://patriotradio.club/"
+    },
+    "isBasedOn": {
+      "@type": "SoftwareSourceCode",
+      "name": "OpenHamClock",
+      "codeRepository": "https://github.com/accius/openhamclock",
+      "license": "https://opensource.org/licenses/MIT",
+      "author": {
+        "@type": "Person",
+        "name": "Chris Hetherington",
+        "callSign": "K0CJH"
+      },
+      "sameAs": [
+        "https://github.com/accius/openhamclock",
+        "https://www.facebook.com/groups/1217043013897440",
+        "https://www.reddit.com/r/OpenHamClock/"
+      ]
+    },
     "isAccessibleForFree": true,
-    "keywords": "ham clock, amateur radio dashboard, DX cluster, PSK Reporter, propagation, band conditions, POTA, SOTA, ham radio map",
-    "screenshot": "https://openhamclock.com/icons/og-image.png",
+    "keywords": "PRC Open HamClock, Patriot Radio Club, K1PRC, ham clock, amateur radio dashboard, DX cluster, PSK Reporter, propagation, band conditions, POTA, SOTA, ham radio map",
     "softwareHelp": {
       "@type": "WebPage",
       "url": "https://openhamclock.com"
