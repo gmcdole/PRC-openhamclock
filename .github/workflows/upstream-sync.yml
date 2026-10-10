@@ -3,12 +3,30 @@
 #
 #   - Nothing new upstream            -> does nothing.
 #   - Merges cleanly, our PRC changes
-#     still present, build + tests OK -> pushes to main and starts the
-#                                        container image build. iffweb02 then
-#                                        deploys it on its own (iff-ohc-autodeploy).
+#     still present, build + tests OK -> pushes to main; that push starts the
+#                                        container image build by itself.
+#                                        iffweb02 then deploys it on its own
+#                                        (iff-ohc-autodeploy).
 #   - Conflict, a PRC change missing,
 #     or any check fails              -> NOTHING is pushed; this run fails (red)
 #                                        and iffweb02's nightly check emails us.
+#
+# The push uses the repository secret GH_GENERAL_TOKEN (a personal access
+# token with the "repo" and "workflow" scopes), not GitHub's built-in token.
+# The built-in token is never allowed to push changes to workflow files, and
+# upstream changes those now and then. A push made with a personal token
+# also starts our other push-triggered workflows (the container image build),
+# so this job no longer has to start that build itself. If the secret is
+# missing, the run fails straight away and pushes nothing.
+#
+# Safety check on upstream workflow changes: after the merge, and before
+# anything is built, the run lists every file under .github/workflows/ that
+# the merge changes and writes that list to the run summary. Workflow-only
+# changes are routine and the run carries on. But if a changed or added
+# workflow file mentions any secret other than GITHUB_TOKEN (or dumps all
+# secrets with toJSON), or upstream touches one of our own workflow files
+# (upstream-sync.yml, release-binaries.yml), the run fails and pushes
+# nothing, because a person needs to look at it first.
 #
 # Run it by hand from the Actions tab; tick "run_checks_anyway" to run the
 # full checks even when upstream has nothing new. That is a test and pushes
@@ -33,7 +51,6 @@ concurrency:
 
 permissions:
   contents: write # push the merge to main
-  actions: write # start the container image build
 
 jobs:
   sync:
@@ -41,11 +58,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Make sure the push token is set
+        env:
+          HAS_TOKEN: ${{ secrets.GH_GENERAL_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != 'true' ]; then
+            echo "The repository secret GH_GENERAL_TOKEN is missing (a personal access token with the repo and workflow scopes). Add it under Settings > Secrets and variables > Actions - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Check out our main
         uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.GH_GENERAL_TOKEN }} # the final push uses this; GITHUB_TOKEN can't push workflow-file changes
 
       - name: Look for new upstream changes
         id: check
@@ -71,6 +98,44 @@ jobs:
             git merge --abort
             exit 1
           fi
+
+      - name: Check what upstream changed in our workflows
+        if: steps.check.outputs.behind != '0'
+        run: |
+          # ORIG_HEAD = our main as it was just before the merge.
+          git rev-parse -q --verify ORIG_HEAD > /dev/null || { echo "Can't find our pre-merge main (ORIG_HEAD) - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          git diff --name-status ORIG_HEAD HEAD -- .github/workflows/ > "$RUNNER_TEMP/wf-changes.txt"
+          if [ ! -s "$RUNNER_TEMP/wf-changes.txt" ]; then
+            echo "Workflow files changed by this merge: none." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Workflow files changed by this merge (A = added, M = changed, D = deleted, R = renamed):" | tee -a "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' "$RUNNER_TEMP/wf-changes.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          bad=0
+          # Every workflow file the merge adds, changes or deletes (a rename counts as both).
+          while IFS= read -r f; do
+            case "$f" in
+              .github/workflows/upstream-sync.yml | .github/workflows/release-binaries.yml)
+                echo "- $f is one of OUR workflow files" | tee -a "$GITHUB_STEP_SUMMARY"
+                bad=1
+                ;;
+            esac
+            [ -f "$f" ] || continue # deleted: nothing left to read
+            # Expression names are not case sensitive, so match without case.
+            if grep -ioE 'secrets[[:space:]]*(\.[A-Za-z0-9_-]*|\[)' -- "$f" | grep -qivxF 'secrets.GITHUB_TOKEN'; then
+              echo "- $f uses a secret other than GITHUB_TOKEN" | tee -a "$GITHUB_STEP_SUMMARY"
+              bad=1
+            fi
+            if grep -qiE 'tojson\([[:space:]]*secrets' -- "$f"; then
+              echo "- $f dumps all secrets with toJSON(secrets)" | tee -a "$GITHUB_STEP_SUMMARY"
+              bad=1
+            fi
+          done < <(git diff --name-only --no-renames ORIG_HEAD HEAD -- .github/workflows/)
+          if [ "$bad" = 1 ]; then
+            echo "Upstream changed a workflow in a way that needs a person - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "None of these touch secrets or our own workflows - carrying on." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Confirm every PRC change is still in the source
         if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
@@ -124,12 +189,9 @@ jobs:
 
       - name: Publish (push to main and start the image build)
         if: steps.check.outputs.behind != '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }} # gh would otherwise pick the 'upstream' remote (accius)
         run: |
-          # Fails (and pushes nothing) if upstream changed workflow files; that needs a person.
+          # Pushed with GH_GENERAL_TOKEN (set by the checkout step), so workflow-file
+          # changes go through, and the push starts the container image build
+          # (docker-openhamclock.yml runs on every push) by itself.
           git push origin HEAD:main
-          # A push made by this job does not start other workflows by itself, so start the build.
-          gh workflow run docker-openhamclock.yml --ref main
-          echo "Pushed $(git rev-parse --short HEAD) to main and started the container image build." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Pushed $(git rev-parse --short HEAD) to main; the push starts the container image build." | tee -a "$GITHUB_STEP_SUMMARY"
