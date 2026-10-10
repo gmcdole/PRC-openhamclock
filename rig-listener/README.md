@@ -15,6 +15,8 @@ Grab the right file for your computer from the [Releases](../../releases) page:
 | **Mac** (Intel)                    | `rig-listener-mac-x64`     |
 | **Linux** (64-bit)                 | `rig-listener-linux-x64`   |
 
+> **Intel Mac note:** GitHub stops offering Intel macOS build machines in autumn 2027, so `rig-listener-mac-x64` will stop shipping with releases after that. Intel Macs can still run the tool from source (`npm install && npm start` in this folder).
+
 ## Setup — Serial Radios (Yaesu, Kenwood, Elecraft, Icom)
 
 ### 1. Plug in your radio via USB

@@ -8,8 +8,8 @@ import { useState, useEffect } from 'react';
 // ─── Announcement Banner ────────────────────────────────────
 // Set to null to hide. Shown at the top of the What's New modal.
 const ANNOUNCEMENT = {
-  emoji: '🌙',
-  text: "26.8.0 is the September drop proper, three weeks after the encore. The globe learned to bounce signals off the Moon, and band-opening alerts finally know which coast you're on. Tips of the hat this cycle: mbrun-plm for three sharp EmComm reports that all shipped within the week, and Mike Bass (N7WLC), whose PR review turned into the zone-scoped band openings below. 73 de K0CJH.",
+  emoji: '🕐',
+  text: '26.9.0 is a two-week release because the reports were too good to sit on. Michael, KE8PLM, ran DireWolf and OpenHamClock side by side for eleven hours and handed us the list of everything we were missing — that list is why your Yaesu and Kenwood beacons now show up. Jason Taggart sent the Mic-E decoder that started it. SQ8BWM fixed two things in his first two PRs, brstiefel1 diagnosed the stale kiosk weather down to the line, and onzarob confirmed the Yaesu tuning quirk. And someone asked for a big clock to fill the screen between nets, so there is one. 73 de K0CJH.',
   color: '#c9d1e6',
   bg: 'rgba(201, 209, 230, 0.10)',
   border: 'rgba(201, 209, 230, 0.30)',
@@ -28,6 +28,49 @@ const ANNOUNCEMENT = {
 // The jump to v26 resets the scheme to something meaningful going forward.
 
 const CHANGELOG = [
+  {
+    version: '26.9.0',
+    date: '2026-10-08',
+    heading:
+      'A two-week release driven by your bug reports. APRS now hears what your TNC hears: Yaesu and Kenwood Mic-E beacons, igate traffic, objects and compressed positions all show up — an eleven-hour side-by-side with DireWolf came out 164 to 163. Clicking a spot lands the radio exactly on frequency the first time. A new Clock layout fills the screen with a big digital clock, and an Idle Clock setting brings it up on its own when nobody has touched the display. Plus the band plan stops crying wolf at 14.105, kiosk weather stays current, and the Rig Listener downloads are back on the Releases page.',
+    features: [
+      {
+        icon: '🕐',
+        title: 'NEW: Clock Layout and Idle Clock',
+        desc: 'A layout that is a big digital clock and nothing else: UTC very large with seconds, local time with its zone beneath, the date, and your callsign and grid in the corner, in your theme and font. Tap the big time to make local the large one — it remembers. Pick it like any layout, add it to a Scene Rotation, or let it appear on its own: Settings → Display → Idle Clock shows it after 2 to 60 minutes with no input, and the first touch, mouse movement or key press brings your previous layout straight back. For shack TVs and club displays between nets.',
+      },
+      {
+        icon: '📡',
+        title: 'APRS Hears Everything Your TNC Hears',
+        desc: "Neither of our APRS parsers understood Mic-E, the default beacon format on Yaesu and Kenwood radios, so every FT-5D, FT-3D, FTM-400 and TH-D74 heard over RF was silently dropped — and that turned out to be only half of it. Third-party frames (igates re-transmitting internet traffic over RF) were dropped whole, object reports had an offset bug that read the timestamp as the latitude, and compressed base-91 positions were never supported. All four are decoded now, along with items and position ambiguity; objects are keyed by their own name so a digipeater's repeater object no longer overwrites the digipeater. The server and the Rig Bridge TNC path now share one parser with a guard test so they can't drift. Verified against the reference aprslib parser and, better, against an eleven-hour DireWolf capture from KE8PLM: 164 stations decoded, 163 in OpenHamClock, the last one fixed since. Reported by Jason Taggart and Michael, KE8PLM.",
+      },
+      {
+        icon: '🎛️',
+        title: 'FIX: Clicking a Spot Lands the Radio on Frequency, First Time',
+        desc: "Clicking a POTA, SOTA or cluster station used to leave Yaesu rigs close but not on the spot, and a second click fixed it. We were sending the frequency and the mode at the same time; Yaesu radios move the dial by about 1.4 kHz when the mode changes, so whenever the mode landed after the frequency the radio ended up off by that much. The tune now does what operators' own macros do: mode first, then frequency, then the frequency once more after the mode settles. Reported by KE8PLM on an FTDx10 and FT-991A, confirmed by onzarob on an FT-950 — tested from the symptom rather than on a bench radio, so tell us if your rig still lands short.",
+      },
+      {
+        icon: '📊',
+        title: 'FIX: The Band Plan Stops Crying Wolf',
+        desc: 'Tune to 14.105 and the privilege bar said "Outside Amateur Extra privileges". The band plan\'s SSB segments on 20, 15 and 10 metres began below where US phone privileges actually start, so those digital stretches were flagged for every class. They are Data segments now, the bar draws adjacent same-type segments as one block instead of two, the tooltip names the emission type ("No Phone privileges here") rather than implying your licence is short, and 60 metres is modelled as it really is under the February 2026 rules — the 5351.5–5366.5 kHz band plus four channels — instead of one continuous range that said yes at 5340 kHz. Reported by KE8PLM.',
+      },
+      {
+        icon: '🌤️',
+        title: 'FIX: Kiosk Weather Stays Current',
+        desc: 'On an always-on display the DE weather panel could go hours stale. The browser fetches Open-Meteo directly, and the poll interval was a two-hour leftover from a server cache that no longer exists on that path. It is 15 minutes now, matching how often Open-Meteo refreshes its current conditions. Diagnosed and fixed by brstiefel1.',
+      },
+      {
+        icon: '🔧',
+        title: 'FIX: WSJT-X Decodes No Longer Freeze with Rig Bridge Running',
+        desc: 'Self-hosters running Rig Bridge could see the WSJT-X decode list freeze on a decode from half an hour ago while the server kept receiving fresh ones. The hook flipped to "local mode" on the first Rig Bridge message of any kind and then stopped polling for good. It now switches only on real WSJT-X data and keeps the fallback alive. Also gone: a console error on every VOACAP heatmap fetch. Both by SQ8BWM, in his first two PRs.',
+      },
+      {
+        icon: '📥',
+        title: 'Rig Listener Downloads Are Back',
+        desc: 'The rig-listener Windows, Mac and Linux executables had quietly stopped attaching to releases since 26.4.0: the Intel Mac build was pinned to a GitHub runner that was retired in December, so every release sat in a queue for a day and gave up. Fixed, and the 26.8.0 release was back-filled. Intel Mac builds end when GitHub retires its last x86 runner in late 2027.',
+      },
+    ],
+  },
   {
     version: '26.8.0',
     date: '2026-09-24',

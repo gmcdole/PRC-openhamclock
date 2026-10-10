@@ -16,6 +16,7 @@ import ModernLayout from './layouts/ModernLayout.jsx';
 import EmcommLayout from './layouts/EmcommLayout.jsx';
 import ContestLayout from './layouts/ContestLayout.jsx';
 import EmeLayout from './layouts/EmeLayout.jsx';
+import ClockLayout from './layouts/ClockLayout';
 import FocusLayout, { FOCUS_LAYOUT_IDS } from './layouts/FocusLayout.jsx';
 
 import { resetActiveLayout } from './store/layoutStore.js';
@@ -64,6 +65,7 @@ import usePresence from './hooks/app/usePresence';
 import useAudioAlerts from './hooks/app/useAudioAlerts';
 import { useSatelliteAnnouncements } from './hooks/app/useSatelliteAnnouncements';
 import useSceneRotation from './hooks/app/useSceneRotation';
+import useIdleClock from './hooks/app/useIdleClock';
 import WhatsNew from './components/WhatsNew.jsx';
 import StarTrekDayModal from './components/StarTrekDayModal.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
@@ -333,7 +335,10 @@ const App = () => {
     showSotaFilters ||
     showWwffFilters ||
     showWwbotaFilters;
-  const sceneRotation = useSceneRotation(config, handleSaveConfig, { paused: anyModalOpen });
+  // Idle clock (Settings → Display): the Clock layout after a quiet period,
+  // restored on the first input. Holds scene rotation still while it is up.
+  const idleClock = useIdleClock(config, handleSaveConfig, { paused: anyModalOpen });
+  const sceneRotation = useSceneRotation(config, handleSaveConfig, { paused: anyModalOpen || idleClock.active });
 
   // Responsive breakpoint for sidebar/header behavior
   const [breakpoint, setBreakpoint] = useState(() => {
@@ -910,6 +915,8 @@ const App = () => {
             <ContestLayout {...layoutProps} />
           ) : config.layout === 'eme' ? (
             <EmeLayout {...layoutProps} />
+          ) : config.layout === 'clock' ? (
+            <ClockLayout {...layoutProps} />
           ) : FOCUS_LAYOUT_IDS.includes(config.layout) ? (
             <FocusLayout {...layoutProps} focus={config.layout} />
           ) : config.layout === 'dockable' ? (

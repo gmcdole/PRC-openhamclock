@@ -3,6 +3,8 @@
  * Lines ~1887-2935 of original server.js
  */
 
+const { fetchFreshestImage, parseLastModified } = require('../utils/solarImageFreshness');
+
 module.exports = function (app, ctx) {
   const { fetch, logDebug, logInfo, logWarn, logErrorOnce, APP_VERSION } = ctx;
 
@@ -336,7 +338,12 @@ module.exports = function (app, ctx) {
       clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = Buffer.from(await res.arrayBuffer());
-      return { buffer, contentType: res.headers.get('content-type') || 'image/jpeg', source: 'SDO' };
+      return {
+        buffer,
+        contentType: res.headers.get('content-type') || 'image/jpeg',
+        source: 'SDO',
+        lastModified: parseLastModified(res.headers.get('last-modified')),
+      };
     } catch (e) {
       clearTimeout(timer);
       throw e;
@@ -372,7 +379,13 @@ module.exports = function (app, ctx) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = Buffer.from(await res.arrayBuffer());
       if (buffer.length < 500) throw new Error(`Response too small (${buffer.length} bytes)`);
-      return { buffer, contentType: res.headers.get('content-type') || 'image/png', source: 'Helioviewer' };
+      // Rendered on demand — no Last-Modified, treated as fresh by the chain.
+      return {
+        buffer,
+        contentType: res.headers.get('content-type') || 'image/png',
+        source: 'Helioviewer',
+        lastModified: null,
+      };
     } catch (e) {
       clearTimeout(timer);
       throw e;
@@ -394,7 +407,12 @@ module.exports = function (app, ctx) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = Buffer.from(await res.arrayBuffer());
       if (buffer.length < 500) throw new Error(`Response too small (${buffer.length} bytes)`);
-      return { buffer, contentType: res.headers.get('content-type') || 'image/jpeg', source: 'LMSAL' };
+      return {
+        buffer,
+        contentType: res.headers.get('content-type') || 'image/jpeg',
+        source: 'LMSAL',
+        lastModified: parseLastModified(res.headers.get('last-modified')),
+      };
     } catch (e) {
       clearTimeout(timer);
       throw e;
@@ -416,7 +434,12 @@ module.exports = function (app, ctx) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = Buffer.from(await res.arrayBuffer());
       if (buffer.length < 500) throw new Error(`Response too small (${buffer.length} bytes)`);
-      return { buffer, contentType: res.headers.get('content-type') || 'image/jpeg', source: 'SOHO' };
+      return {
+        buffer,
+        contentType: res.headers.get('content-type') || 'image/jpeg',
+        source: 'SOHO',
+        lastModified: parseLastModified(res.headers.get('last-modified')),
+      };
     } catch (e) {
       clearTimeout(timer);
       throw e;
@@ -436,6 +459,8 @@ module.exports = function (app, ctx) {
     let inflight = sdoInflight.get(type);
     if (inflight) return inflight;
 
+    // Freshness-gated: a source that answers 200 with a weeks-old image (NASA's
+    // /latest/ symlinks froze 2026-09-21) is skipped in favour of the next one.
     inflight = (async () => {
       const sources = [
         { name: 'SDO', fn: () => fetchFromSDO(type) },
@@ -443,20 +468,34 @@ module.exports = function (app, ctx) {
         { name: 'SOHO', fn: () => fetchFromSOHO(type) },
         { name: 'Helioviewer', fn: () => fetchFromHelioviewer(type) },
       ];
-      for (const src of sources) {
-        try {
-          const { buffer, contentType, source } = await src.fn();
-          sdoImageCache.set(type, { buffer, contentType, timestamp: Date.now(), source });
-          SDO_NEGATIVE_CACHE.delete(type);
-          console.log(`[Solar] Image fetched: ${type} (${buffer.length} bytes from ${source})`);
-          return { buffer, contentType, source };
-        } catch (e) {
-          const reason = e.name === 'AbortError' ? 'timeout' : e.message;
-          console.error(`[Solar] ${src.name} failed (${type}): ${reason}`);
-        }
+      try {
+        const {
+          buffer,
+          contentType,
+          source: origin,
+          lastModified,
+          stale,
+        } = await fetchFreshestImage(sources, {
+          onFail: (name, e) => {
+            const reason = e.name === 'AbortError' ? 'timeout' : e.message;
+            console.error(`[Solar] ${name} failed (${type}): ${reason}`);
+          },
+          onStale: (name, lm) => {
+            const ageH = ((Date.now() - lm) / 3600000).toFixed(1);
+            logWarn(
+              `[Solar] ${name} image for ${type} is ${ageH} h old (${new Date(lm).toISOString()}) — trying next source`,
+            );
+          },
+        });
+        const source = stale ? `${origin} (stale)` : origin;
+        sdoImageCache.set(type, { buffer, contentType, timestamp: Date.now(), source, lastModified });
+        SDO_NEGATIVE_CACHE.delete(type);
+        console.log(`[Solar] Image fetched: ${type} (${buffer.length} bytes from ${source})`);
+        return { buffer, contentType, source, lastModified };
+      } catch (e) {
+        SDO_NEGATIVE_CACHE.set(type, Date.now());
+        throw e;
       }
-      SDO_NEGATIVE_CACHE.set(type, Date.now());
-      throw new Error('All solar image sources failed');
     })().finally(() => sdoInflight.delete(type));
 
     sdoInflight.set(type, inflight);
@@ -477,6 +516,7 @@ module.exports = function (app, ctx) {
       res.set('Cache-Control', 'public, max-age=900');
       res.set('X-SDO-Cache', 'hit');
       res.set('X-SDO-Source', cached.source || 'unknown');
+      if (cached.lastModified) res.set('X-SDO-Image-Date', new Date(cached.lastModified).toUTCString());
       return res.send(cached.buffer);
     }
 
@@ -498,11 +538,12 @@ module.exports = function (app, ctx) {
     }
 
     try {
-      const { buffer, contentType, source } = await runSolarImageChain(type);
+      const { buffer, contentType, source, lastModified } = await runSolarImageChain(type);
       res.set('Content-Type', contentType);
       res.set('Cache-Control', 'public, max-age=900');
       res.set('X-SDO-Cache', 'miss');
       res.set('X-SDO-Source', source);
+      if (lastModified) res.set('X-SDO-Image-Date', new Date(lastModified).toUTCString());
       return res.send(buffer);
     } catch (e) {
       if (cached?.buffer && now - cached.timestamp < SDO_STALE_SERVE) {

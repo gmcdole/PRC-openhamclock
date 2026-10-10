@@ -1,5 +1,6 @@
 # Builds standalone rig-listener executables for Windows, Mac, and Linux.
-# Runs on release creation or manual trigger.
+# Runs on release creation, or manually — give the manual run a release tag
+# (e.g. v26.8.0) and the binaries are attached to that existing release.
 #
 # Each OS runner installs native serialport bindings for its platform,
 # then @yao-pkg/pkg bundles everything into a single executable.
@@ -7,7 +8,12 @@
 name: Build Rig Listener
 
 on:
-  workflow_dispatch: # Manual trigger from Actions tab
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to attach the binaries to (e.g. v26.8.0); leave blank to only build'
+        required: false
+        default: ''
   release:
     types: [created]
 
@@ -29,7 +35,11 @@ jobs:
             output: rig-listener-win-x64.exe
             artifact: rig-listener-win-x64
 
-          - os: macos-13 # Intel Mac
+          # Intel Mac. macos-13 was retired 2025-12-04 and left this job queued
+          # for 24 h until GitHub cancelled it, which sank every release's
+          # rig-listener assets from 26.4.0 on. macos-15-intel is the last
+          # x86_64 image GitHub offers, available until August 2027.
+          - os: macos-15-intel
             target: node18-macos-x64
             output: rig-listener-mac-x64
             artifact: rig-listener-mac-x64
@@ -76,7 +86,7 @@ jobs:
 
   # Attach all binaries to the GitHub release
   attach-to-release:
-    if: github.repository == 'accius/openhamclock' && github.event_name == 'release'
+    if: github.repository == 'accius/openhamclock' && (github.event_name == 'release' || inputs.tag != '')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -90,4 +100,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v3
         with:
+          # On the release event this is the triggering release; on a manual
+          # run it is the tag typed into the dispatch form.
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
           files: artifacts/**/*

@@ -142,6 +142,7 @@ export const SETTINGS_TAB_HELP = {
   station: 'settings',
   integrations: 'settings',
   display: 'layouts-themes-profiles',
+  clock: 'layouts-themes-profiles',
   layers: 'map-layers',
   satellites: 'satellites',
   profiles: 'layouts-themes-profiles',

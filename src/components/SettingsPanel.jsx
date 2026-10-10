@@ -107,6 +107,7 @@ export const SettingsPanel = ({
   const [displaySchedule, setDisplaySchedule] = useState(
     config?.displaySchedule || { enabled: false, sleepTime: '23:00', wakeTime: '07:00', keepSignalActive: true },
   );
+  const [idleClock, setIdleClock] = useState(config?.idleClock || { enabled: false, minutes: 10 });
   const [sceneRotation, setSceneRotation] = useState(
     config?.sceneRotation || { enabled: false, intervalSec: 60, layouts: [] },
   );
@@ -430,6 +431,7 @@ export const SettingsPanel = ({
       setSatTrackDuration(config.satellite?.trackDurationMins ?? 45);
       setLayout(config.layout || 'modern');
       setSceneRotation(config.sceneRotation || { enabled: false, intervalSec: 60, layouts: [] });
+      setIdleClock(config.idleClock || { enabled: false, minutes: 10 });
       setMouseZoom(config.mouseZoom || 50);
       setTimezone(config.timezone || '');
       setDxClusterSource(config.dxClusterSource || 'dxspider-proxy');
@@ -707,6 +709,7 @@ export const SettingsPanel = ({
       sharePresence,
       displaySchedule,
       sceneRotation,
+      idleClock,
       // units,
       allUnits: { dist: distUnits, temp: tempUnits, press: pressUnits },
       // Spread the existing propagation block: this panel only edits mode and
@@ -827,6 +830,10 @@ export const SettingsPanel = ({
     }),
     airtraffic: t('station.settings.layout.airtraffic.describe', {
       defaultValue: 'Live aircraft and ATC sectors over a big map, plus world clocks.',
+    }),
+    clock: t('station.settings.layout.clock.describe', {
+      defaultValue:
+        'A big digital clock and nothing else — UTC and local, date, callsign. For shack TVs during down time.',
     }),
   };
 
@@ -4262,6 +4269,7 @@ export const SettingsPanel = ({
                     'hunter',
                     'weather',
                     'airtraffic',
+                    'clock',
                   ].map((l) => (
                     <button
                       key={l}
@@ -4350,6 +4358,8 @@ export const SettingsPanel = ({
                         setSceneRotation({ ...sceneRotation, enabled: false });
                       } else {
                         setSceneRotation({ ...sceneRotation, enabled: true, intervalSec: parseInt(v, 10) });
+                        // The two would fight over the layout — one at a time.
+                        if (idleClock.enabled) setIdleClock({ ...idleClock, enabled: false });
                       }
                     }}
                     aria-label={t('station.settings.sceneRotation.interval', { defaultValue: 'Rotation interval' })}
@@ -4409,6 +4419,7 @@ export const SettingsPanel = ({
                         'hunter',
                         'weather',
                         'airtraffic',
+                        'clock',
                         ...profileIds,
                       ].map((l) => {
                         const presetName = l.startsWith('dockable#')
@@ -4474,6 +4485,59 @@ export const SettingsPanel = ({
                       })}
                     </>
                   )}
+                </div>
+              </div>
+
+              {/* Idle clock — show the Clock layout after a quiet period */}
+              <div style={{ marginBottom: '24px' }}>
+                <label
+                  style={{
+                    display: 'block',
+                    marginBottom: '8px',
+                    color: 'var(--text-muted)',
+                    fontSize: '11px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '1px',
+                  }}
+                >
+                  {t('station.settings.idleClock.title', { defaultValue: 'Idle Clock' })}
+                </label>
+                <select
+                  value={idleClock.enabled ? String(idleClock.minutes || 10) : 'off'}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === 'off') {
+                      setIdleClock({ ...idleClock, enabled: false });
+                    } else {
+                      setIdleClock({ enabled: true, minutes: parseInt(v, 10) });
+                      if (sceneRotation.enabled) setSceneRotation({ ...sceneRotation, enabled: false });
+                    }
+                  }}
+                  aria-label={t('station.settings.idleClock.after', { defaultValue: 'Show the clock after' })}
+                  style={{
+                    padding: '8px 10px',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    color: 'var(--text-primary)',
+                    fontSize: '13px',
+                  }}
+                >
+                  <option value="off">{t('station.settings.idleClock.off', { defaultValue: 'Off' })}</option>
+                  {[2, 5, 10, 15, 30, 60].map((m) => (
+                    <option key={m} value={String(m)}>
+                      {t('station.settings.idleClock.afterMinutes', {
+                        defaultValue: 'After {{minutes}} minutes of no input',
+                        minutes: m,
+                      })}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '8px', lineHeight: '1.5' }}>
+                  {t('station.settings.idleClock.describe', {
+                    defaultValue:
+                      'Shows the big Clock layout when nobody has touched the screen for a while, and comes straight back to the previous layout on any touch, mouse or key. Turning this on turns Scene Rotation off, and vice versa.',
+                  })}
                 </div>
               </div>
 

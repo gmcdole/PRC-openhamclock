@@ -57,31 +57,56 @@ const BandPlanBar = ({ freq }) => {
 
   // License-class privilege shading: kHz slices of each segment the configured
   // class may not transmit in. Empty for 'Other' (no restriction UI at all).
+  // Each slice remembers the segment's mode: the restriction is about that
+  // emission type here, not the class as such — an Extra may run CW/data at
+  // 14.105 even though phone there is out for everyone (#1193).
   const restricted = normalizeLicenseClass(licenseClass)
-    ? band.segments.flatMap((seg) => nonPrivilegedSlices(licenseClass, seg.min, seg.max, seg.mode))
+    ? band.segments.flatMap((seg) =>
+        nonPrivilegedSlices(licenseClass, seg.min, seg.max, seg.mode).map((slice) => ({
+          ...slice,
+          mode: classLabel(getSegmentClass(seg.mode)),
+        })),
+      )
     : [];
-  const restrictedTitle = restricted.length
-    ? t('app.bandPlan.restricted', { licenseClass: t(`station.settings.licenseClass.${licenseClass}`) })
-    : '';
+  const restrictedTitle = (slice) =>
+    t('app.bandPlan.restrictedMode', {
+      licenseClass: t(`station.settings.licenseClass.${licenseClass}`),
+      mode: slice.mode,
+    });
+
+  // Adjacent segments of the same display class draw as one block with one
+  // tick-free boundary — two Data blocks side by side looked like a privilege
+  // boundary (#1193). The finer band-plan descriptions stay in the tooltip.
+  const blocks = band.segments.reduce((acc, seg) => {
+    const cls = getSegmentClass(seg.mode);
+    const prev = acc[acc.length - 1];
+    if (prev && prev.cls === cls && prev.max === seg.min) {
+      prev.max = seg.max;
+      if (seg.desc) prev.descs.push(seg.desc);
+    } else {
+      acc.push({ cls, min: seg.min, max: seg.max, descs: seg.desc ? [seg.desc] : [] });
+    }
+    return acc;
+  }, []);
 
   return (
     <div className="band-plan-bar" aria-label={t('app.bandPlan.aria', { band: band.name })}>
       <div className="bpb-track">
-        {band.segments.map((seg) => {
-          const cls = getSegmentClass(seg.mode);
-          return (
-            <div
-              key={seg.min}
-              className={`bpb-seg bpb-${cls}`}
-              style={{
-                left: `${pct(seg.min)}%`,
-                width: `${pct(seg.max) - pct(seg.min)}%`,
-                background: SEGMENT_COLORS[cls],
-              }}
-              title={`${classLabel(cls)}: ${fmtMHz(seg.min)}–${fmtMHz(seg.max)} ${t('app.units.mhz')}`}
-            />
-          );
-        })}
+        {blocks.map((blk) => (
+          <div
+            key={blk.min}
+            className={`bpb-seg bpb-${blk.cls}`}
+            style={{
+              left: `${pct(blk.min)}%`,
+              width: `${pct(blk.max) - pct(blk.min)}%`,
+              background: SEGMENT_COLORS[blk.cls],
+            }}
+            title={[
+              `${classLabel(blk.cls)}: ${fmtMHz(blk.min)}–${fmtMHz(blk.max)} ${t('app.units.mhz')}`,
+              ...blk.descs,
+            ].join('\n')}
+          />
+        ))}
         {/* Out-of-privilege shading for the configured license class */}
         {restricted.map((slice) => (
           <div
@@ -91,12 +116,12 @@ const BandPlanBar = ({ freq }) => {
               left: `${pct(slice.min)}%`,
               width: `${pct(slice.max) - pct(slice.min)}%`,
             }}
-            title={`${restrictedTitle}: ${fmtMHz(slice.min)}–${fmtMHz(slice.max)} ${t('app.units.mhz')}`}
+            title={`${restrictedTitle(slice)}: ${fmtMHz(slice.min)}–${fmtMHz(slice.max)} ${t('app.units.mhz')}`}
           />
         ))}
-        {/* Ticks at internal segment boundaries */}
-        {band.segments.slice(1).map((seg) => (
-          <div key={`tick-${seg.min}`} className="bpb-tick" style={{ left: `${pct(seg.min)}%` }} />
+        {/* Ticks at internal block boundaries (where the display class changes) */}
+        {blocks.slice(1).map((blk) => (
+          <div key={`tick-${blk.min}`} className="bpb-tick" style={{ left: `${pct(blk.min)}%` }} />
         ))}
         {pos !== null && <div className="bpb-needle" style={{ left: `${pos}%` }} />}
       </div>
