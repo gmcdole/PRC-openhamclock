@@ -3,12 +3,44 @@
 #
 #   - Nothing new upstream            -> does nothing.
 #   - Merges cleanly, our PRC changes
-#     still present, build + tests OK -> pushes to main and starts the
-#                                        container image build. iffweb02 then
-#                                        deploys it on its own (iff-ohc-autodeploy).
+#     still present, build + tests OK -> pushes to main; that push starts the
+#                                        container image build by itself.
+#                                        iffweb02 then deploys it on its own
+#                                        (iff-ohc-autodeploy).
 #   - Conflict, a PRC change missing,
 #     or any check fails              -> NOTHING is pushed; this run fails (red)
 #                                        and iffweb02's nightly check emails us.
+#
+# The run has two jobs, so upstream's code never runs next to our token:
+#
+#   1. "check" does all the work that runs upstream code: the merge, the
+#      checks below, npm install, build and tests. It has NO push token, only
+#      GitHub's read-only built-in token, which is not even kept on disk. If
+#      everything passes, it packs the merged result into a git bundle and
+#      saves it (with the commit IDs) as a 1-day artifact of the run.
+#   2. "publish" only runs if job 1 passed and there was something new. It
+#      runs NO npm or upstream code. It unpacks the bundle and checks that
+#      the merge commit is exactly "our main + upstream": its two parents are
+#      our main as it was and accius's commit, accius really has that commit,
+#      and its files are exactly what merging those two gives. If our main has
+#      moved since job 1 started, it stops. Then it pushes that exact commit.
+#
+# The push uses the repository secret GH_GENERAL_TOKEN (a personal access
+# token with the "repo" and "workflow" scopes), not GitHub's built-in token.
+# The built-in token is never allowed to push changes to workflow files, and
+# upstream changes those now and then. A push made with a personal token
+# also starts our other push-triggered workflows (the container image build),
+# so this workflow no longer has to start that build itself. If the secret is
+# missing, the publish job fails straight away and pushes nothing.
+#
+# Safety check on upstream workflow changes: after the merge, and before
+# anything is built, the run lists every file under .github/workflows/ that
+# the merge changes and writes that list to the run summary. Workflow-only
+# changes are routine and the run carries on. But if a changed or added
+# workflow file mentions any secret other than GITHUB_TOKEN (or dumps all
+# secrets with toJSON), or upstream touches one of our own workflow files
+# (upstream-sync.yml, release-binaries.yml), the run fails and pushes
+# nothing, because a person needs to look at it first.
 #
 # Run it by hand from the Actions tab; tick "run_checks_anyway" to run the
 # full checks even when upstream has nothing new. That is a test and pushes
@@ -32,20 +64,27 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # push the merge to main
-  actions: write # start the container image build
+  contents: read # the push uses GH_GENERAL_TOKEN, in the publish job only
 
 jobs:
-  sync:
+  check:
     if: github.repository == 'gmcdole/PRC-openhamclock'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      behind: ${{ steps.check.outputs.behind }}
+      pre_sha: ${{ steps.record.outputs.pre_sha }}
+      merge_sha: ${{ steps.record.outputs.merge_sha }}
+      upstream_sha: ${{ steps.record.outputs.upstream_sha }}
     steps:
       - name: Check out our main
         uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false # upstream code runs in this job: leave no token on disk
 
       - name: Look for new upstream changes
         id: check
@@ -71,6 +110,55 @@ jobs:
             git merge --abort
             exit 1
           fi
+
+      - name: Record the merge (before any upstream code runs)
+        id: record
+        if: steps.check.outputs.behind != '0'
+        run: |
+          PRE=$(git rev-parse ORIG_HEAD)
+          MERGE=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/main)
+          [ "$(git rev-parse HEAD^1) $(git rev-parse HEAD^2)" = "$PRE $UPSTREAM" ] || { echo "The merge commit's parents are not our main + upstream - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          { echo "pre_sha=$PRE"; echo "merge_sha=$MERGE"; echo "upstream_sha=$UPSTREAM"; } >> "$GITHUB_OUTPUT"
+          echo "Merge commit $MERGE = our main $PRE + upstream $UPSTREAM." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check what upstream changed in our workflows
+        if: steps.check.outputs.behind != '0'
+        run: |
+          # ORIG_HEAD = our main as it was just before the merge.
+          git rev-parse -q --verify ORIG_HEAD > /dev/null || { echo "Can't find our pre-merge main (ORIG_HEAD) - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          git diff --name-status ORIG_HEAD HEAD -- .github/workflows/ > "$RUNNER_TEMP/wf-changes.txt"
+          if [ ! -s "$RUNNER_TEMP/wf-changes.txt" ]; then
+            echo "Workflow files changed by this merge: none." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Workflow files changed by this merge (A = added, M = changed, D = deleted, R = renamed):" | tee -a "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' "$RUNNER_TEMP/wf-changes.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          bad=0
+          # Every workflow file the merge adds, changes or deletes (a rename counts as both).
+          while IFS= read -r f; do
+            case "$f" in
+              .github/workflows/upstream-sync.yml | .github/workflows/release-binaries.yml)
+                echo "- $f is one of OUR workflow files" | tee -a "$GITHUB_STEP_SUMMARY"
+                bad=1
+                ;;
+            esac
+            [ -f "$f" ] || continue # deleted: nothing left to read
+            # Expression names are not case sensitive, so match without case.
+            if grep -ioE 'secrets[[:space:]]*(\.[A-Za-z0-9_-]*|\[)' -- "$f" | grep -qivxF 'secrets.GITHUB_TOKEN'; then
+              echo "- $f uses a secret other than GITHUB_TOKEN" | tee -a "$GITHUB_STEP_SUMMARY"
+              bad=1
+            fi
+            if grep -qiE 'tojson\([[:space:]]*secrets' -- "$f"; then
+              echo "- $f dumps all secrets with toJSON(secrets)" | tee -a "$GITHUB_STEP_SUMMARY"
+              bad=1
+            fi
+          done < <(git diff --name-only --no-renames ORIG_HEAD HEAD -- .github/workflows/)
+          if [ "$bad" = 1 ]; then
+            echo "Upstream changed a workflow in a way that needs a person - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "None of these touch secrets or our own workflows - carrying on." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Confirm every PRC change is still in the source
         if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
@@ -122,14 +210,88 @@ jobs:
           grep -qF 'https://openhamclock.patriotradio.club/' dist/index.html || { echo "Built index.html lost our tags - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
           echo "Built site still has the PRC donate options and tags." | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish (push to main and start the image build)
+      - name: Pack the merged result for the publish job
         if: steps.check.outputs.behind != '0'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }} # gh would otherwise pick the 'upstream' remote (accius)
+          PRE: ${{ steps.record.outputs.pre_sha }}
+          MERGE: ${{ steps.record.outputs.merge_sha }}
+          UPSTREAM: ${{ steps.record.outputs.upstream_sha }}
         run: |
-          # Fails (and pushes nothing) if upstream changed workflow files; that needs a person.
-          git push origin HEAD:main
-          # A push made by this job does not start other workflows by itself, so start the build.
-          gh workflow run docker-openhamclock.yml --ref main
-          echo "Pushed $(git rev-parse --short HEAD) to main and started the container image build." | tee -a "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/sync"
+          # Everything new since our pre-merge main, under one branch name.
+          git branch -f upstream-sync-merge "$MERGE"
+          git bundle create "$RUNNER_TEMP/sync/merge.bundle" upstream-sync-merge "^$PRE"
+          { echo "pre_sha=$PRE"; echo "merge_sha=$MERGE"; echo "upstream_sha=$UPSTREAM"; } > "$RUNNER_TEMP/sync/shas.txt"
+          echo "Packed $MERGE for publishing." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save it as a run artifact
+        if: steps.check.outputs.behind != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-sync-merge
+          path: ${{ runner.temp }}/sync/
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: check
+    if: github.repository == 'gmcdole/PRC-openhamclock' && needs.check.result == 'success' && needs.check.outputs.behind != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # the push uses GH_GENERAL_TOKEN
+    steps:
+      - name: Make sure the push token is set
+        env:
+          HAS_TOKEN: ${{ secrets.GH_GENERAL_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != 'true' ]; then
+            echo "The repository secret GH_GENERAL_TOKEN is missing (a personal access token with the repo and workflow scopes). Add it under Settings > Secrets and variables > Actions - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Check out our main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GH_GENERAL_TOKEN }} # the push uses this; GITHUB_TOKEN can't push workflow-file changes
+
+      - name: Get the merged result from the check job
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-sync-merge
+          path: ${{ runner.temp }}/sync
+
+      - name: Verify the merged result (no npm, no upstream code)
+        env:
+          PRE: ${{ needs.check.outputs.pre_sha }}
+          MERGE: ${{ needs.check.outputs.merge_sha }}
+          UPSTREAM: ${{ needs.check.outputs.upstream_sha }}
+        run: |
+          fail() { echo "$1 - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          B="$RUNNER_TEMP/sync/merge.bundle"
+          for v in "$PRE" "$MERGE" "$UPSTREAM"; do
+            [[ "$v" =~ ^[0-9a-f]{40}$ ]] || fail "The check job did not hand over the commit IDs"
+          done
+          [ "$(cat "$RUNNER_TEMP/sync/shas.txt")" = "$(printf 'pre_sha=%s\nmerge_sha=%s\nupstream_sha=%s' "$PRE" "$MERGE" "$UPSTREAM")" ] || fail "The saved commit IDs don't match the check job's"
+          git bundle verify "$B" || fail "The bundle is damaged or doesn't fit our main"
+          git fetch --no-tags "$B" upstream-sync-merge:refs/upstream-sync/merge || fail "Could not read the bundle"
+          [ "$(git rev-parse refs/upstream-sync/merge)" = "$MERGE" ] || fail "The bundle holds a different commit than the check job tested"
+          [ "$(git rev-list --parents -n 1 "$MERGE")" = "$MERGE $PRE $UPSTREAM" ] || fail "The merge commit's parents are not exactly our main $PRE + upstream $UPSTREAM"
+          git fetch --no-tags origin main
+          [ "$(git rev-parse origin/main)" = "$PRE" ] || fail "Our main moved since the check job started (now $(git rev-parse --short origin/main))"
+          git fetch --no-tags https://github.com/accius/openhamclock.git main:refs/upstream-sync/accius
+          git merge-base --is-ancestor "$UPSTREAM" refs/upstream-sync/accius || fail "accius/openhamclock main does not contain $UPSTREAM"
+          [ "$(git merge-tree --write-tree "$PRE" "$UPSTREAM")" = "$(git rev-parse "$MERGE^{tree}")" ] || fail "The merge commit's files are not exactly our main + upstream"
+          echo "Verified $MERGE: our main + upstream, nothing else." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish (push to main and start the image build)
+        env:
+          MERGE: ${{ needs.check.outputs.merge_sha }}
+        run: |
+          # Pushed with GH_GENERAL_TOKEN (set by the checkout step), so workflow-file
+          # changes go through, and the push starts the container image build
+          # (docker-openhamclock.yml runs on every push) by itself.
+          git -c core.hooksPath=/dev/null push origin "$MERGE:refs/heads/main"
+          echo "Pushed $(git rev-parse --short "$MERGE") to main; the push starts the container image build." | tee -a "$GITHUB_STEP_SUMMARY"
