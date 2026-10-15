@@ -154,7 +154,7 @@ _Settings → Map Layers: every overlay grouped by category, each with an opacit
 
 - **Your station (DE)** is marked at your configured location. The DE panel shows grid, coordinates, sunrise/sunset, and local weather.
 - **Click anywhere on the map** to set the DX target there. The DX panel updates with bearing, distance, grid, sun times, and (optionally) weather; the propagation panels recalculate for the new path.
-- **Click any spot** (cluster, POTA, PSK, WSJT-X…) to set that station as the DX target. The map drops a short expanding-ring **pulse** on the target so your eye finds it in a busy view, and pans to it if it is off-screen (if it is already in view the map stays put). APRS panel rows and, in the EmComm layout, station, gateway, and roster rows work the same way. Flat map only for now — the Azimuthal and 3D views ignore the pan.
+- **Click any spot** (cluster, POTA, PSK, WSJT-X…) to set that station as the DX target. The map drops a short expanding-ring **pulse** on the target so your eye finds it in a busy view, and pans to it if it is off-screen (if it is already in view the map stays put). APRS panel rows and, in the EmComm layout, station, gateway, and roster rows work the same way. On the Azimuthal view the ring is drawn without panning; on the 3D globe the camera swings to the station and the ring pulses on the surface.
 - **Type a locator:** click the DX grid display and enter a grid like `JN58sm`.
 - **DX Favorites:** star up to 10 DX grids for one-click recall — great for regular skeds.
 - **DXCC entity picker:** browse/search the full DXCC list next to the DX grid display.
@@ -293,7 +293,7 @@ _The Solar panel cycling through live imagery, indices, X-ray flux, and the moon
 
 ### EmComm and mesh
 
-- **APRS** — live APRS-IS stations (plus RF-heard stations via a local TNC), with symbol icons, watchlist groups, and messaging.
+- **APRS** — live APRS-IS stations (plus RF-heard stations via a local TNC), with symbol icons, watchlist groups, and messaging. Each station shows the radio or software that sent it (Yaesu FT5D, Kenwood TH-D74, Dire Wolf…), identified from the packet's tocall or Mic-E type code using the aprs-deviceid table; the raw type bytes no longer appear in the comment. The list sorts by call, age, or distance, and an **Aa** button draws callsign tags beside the APRS symbols on the map.
 - **APRS Telemetry** — per-station sensor dashboards with trend sparklines, built from APRS telemetry frames.
 - **Meshtastic** — nodes, messages, and network health from a Meshtastic device (direct, MQTT, or server proxy connection).
 - **MeshCom** — nodes, messages, and weather/telemetry from a MeshCom LoRa mesh via the rig-bridge UDP plugin.
@@ -407,6 +407,7 @@ The session lives on the server your OpenHamClock talks to (the hosted site, or 
 **Settings → Integrations → Logbook Sync** connects the native logbook to the loggers you already use. Everything is opt-in and per-user: your API keys and LoTW login are stored **only in this browser** (never on the server, never in backups or profile share codes), and each request carries your own credentials — so this works on the hosted site too, without sharing anything with other users.
 
 - **Wavelog / Cloudlog push** — enter your instance URL, API key, and Station Profile ID (the **Test** button lists your profiles with their IDs). Every QSO you log in OpenHamClock is pushed automatically; failures go into a retry queue (capped at 100) that drains on retry or via **Push all unsynced**. The pending count shows in the card and in the Logbook panel footer.
+- **Wavelog pull** — enable **Pull QSOs from Wavelog into this logbook**, use **Test** to select one or more Station Profiles, then **Sync now** for the initial import. After that, OpenHamClock incrementally pulls new QSOs into the native logbook. When the server is configured for Wavelog MQTT events, newly logged QSOs trigger an immediate incremental pull and grid-bearing contacts also appear on the **Logged QSOs (API)** map layer. The saved cursor prevents already-fetched QSOs from being downloaded again.
 - **QRZ Logbook push** — uses a **QRZ Logbook API key** (Logbook → Settings on qrz.com; requires an XML subscription). This is _not_ the QRZ username/password used for callsign lookups. Same automatic push + retry queue.
 - **LoTW confirmations** — **Sync LoTW confirmations** pulls your confirmed QSLs from Logbook of The World and marks matching local QSOs (call + band + mode + time within ±30 minutes) with a green **LoTW✓** chip. Syncs are incremental (only QSLs since your last sync) and rate-limited to once every 5 minutes — LoTW is slow, be patient with it.
 

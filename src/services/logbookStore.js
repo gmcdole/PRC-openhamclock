@@ -145,6 +145,9 @@ const state = {
   subscribers: new Set(),
   pendingPrefill: null, // "log this spot" hand-off payload
   prefillSubscribers: new Set(),
+  tunedSpot: null, // last spot the rig was tuned to — { call, freqHz, gridsquare }
+  viewFilter: { band: '', mode: '', search: '' }, // Logbook panel's table filter, mirrored on the map
+  viewFilterSubscribers: new Set(),
   panelMounts: 0, // number of currently mounted LogbookPanel instances
 };
 
@@ -228,6 +231,8 @@ export const add = async (fields) => {
   await init();
   const record = { ...fields, id: fields?.id || makeQsoId() };
   state.qsos.push(record);
+  // That station is logged now — the next +QSO must not offer it again.
+  if (state.tunedSpot && sameCall(state.tunedSpot.call, record.call)) state.tunedSpot = null;
   notify();
   try {
     await state.adapter.put(record);
@@ -242,7 +247,7 @@ export const add = async (fields) => {
  * QSO (or an earlier record in the same batch).
  * @returns {{ imported: number, skipped: number }}
  */
-export const addMany = async (records) => {
+export const addMany = async (records, { strict = false } = {}) => {
   await init();
   const seen = new Set(state.qsos.map(dedupKey));
   const fresh = [];
@@ -266,6 +271,12 @@ export const addMany = async (records) => {
     try {
       await state.adapter.putMany(fresh);
     } catch (err) {
+      if (strict) {
+        const freshIds = new Set(fresh.map((qso) => qso.id));
+        state.qsos = state.qsos.filter((qso) => !freshIds.has(qso.id));
+        notify();
+        throw err;
+      }
       persistError('addMany', err);
     }
   }
@@ -365,6 +376,113 @@ export const subscribePrefill = (cb) => {
   };
 };
 
+// ── Tuned-spot hand-off ─────────────────────────────────────────────────────
+// Clicking a spot tunes the rig; the call is remembered here so the Logbook
+// panel's +QSO can fill it in. It is only offered while the rig is still near
+// the spot's frequency, and is dropped once a QSO with that call is saved.
+
+/** How far (Hz) the dial may drift from the spot and still count as "on it". */
+export const TUNED_SPOT_TOLERANCE_HZ = 3000;
+
+const sameCall = (a, b) =>
+  String(a || '')
+    .trim()
+    .toUpperCase() ===
+  String(b || '')
+    .trim()
+    .toUpperCase();
+
+/** Remember the spot the rig was just tuned to. Ignored without a call or frequency. */
+export const setTunedSpot = (spot) => {
+  const call = String(spot?.call || '')
+    .trim()
+    .toUpperCase();
+  const freqHz = Number(spot?.freqHz);
+  if (!call || !(freqHz > 0)) return;
+  state.tunedSpot = { call, freqHz, gridsquare: spot.gridsquare || undefined };
+};
+
+/**
+ * The tuned spot relative to the rig: `{ call, gridsquare, near }`, where
+ * `near` means the rig (`rigFreqHz`) is within TUNED_SPOT_TOLERANCE_HZ of it.
+ * null when no spot is remembered or there is no rig reading.
+ */
+export const tunedSpotForRig = (rigFreqHz) => {
+  const spot = state.tunedSpot;
+  const rig = Number(rigFreqHz);
+  if (!spot || !(rig > 0)) return null;
+  return {
+    call: spot.call,
+    gridsquare: spot.gridsquare,
+    near: Math.abs(rig - spot.freqHz) <= TUNED_SPOT_TOLERANCE_HZ,
+  };
+};
+
+/**
+ * Prefill for a new QSO from the tuned spot: `{ call, gridsquare? }` while the
+ * rig is near it, else null — also null without a rig reading, since a stale
+ * call could then slip into a QSO with someone else.
+ */
+export const tunedSpotPrefill = (rigFreqHz) => {
+  const spot = tunedSpotForRig(rigFreqHz);
+  if (!spot?.near) return null;
+  return spot.gridsquare ? { call: spot.call, gridsquare: spot.gridsquare } : { call: spot.call };
+};
+
+// ── Shared view filter ──────────────────────────────────────────────────────
+// The Logbook panel's band / mode / search filter. The panel publishes it here
+// so the "Logbook QSOs" map layer shows exactly the QSOs the table lists.
+
+const EMPTY_FILTER = { band: '', mode: '', search: '' };
+
+/**
+ * Does a QSO pass the view filter? Band matches the logged band tag, mode is
+ * case-insensitive, and search looks in call, name and comment.
+ */
+export const qsoMatchesFilter = (rec, filter) => {
+  const { band, mode, search } = filter || EMPTY_FILTER;
+  if (band && rec?.band !== band) return false;
+  if (mode && String(rec?.mode || '').toUpperCase() !== String(mode).toUpperCase()) return false;
+  const q = String(search || '')
+    .trim()
+    .toUpperCase();
+  if (!q) return true;
+  return (
+    String(rec?.call || '')
+      .toUpperCase()
+      .includes(q) ||
+    String(rec?.name || '')
+      .toUpperCase()
+      .includes(q) ||
+    String(rec?.comment || '')
+      .toUpperCase()
+      .includes(q)
+  );
+};
+
+export const getViewFilter = () => state.viewFilter;
+
+/** Publish the panel's filter (missing fields reset to "all"). */
+export const setViewFilter = (filter) => {
+  const next = { ...EMPTY_FILTER, ...(filter || {}) };
+  const prev = state.viewFilter;
+  if (next.band === prev.band && next.mode === prev.mode && next.search === prev.search) return;
+  state.viewFilter = next;
+  state.viewFilterSubscribers.forEach((cb) => {
+    try {
+      cb(next);
+    } catch {}
+  });
+};
+
+/** Subscribe to view-filter changes. Returns an unsubscribe fn. */
+export const subscribeViewFilter = (cb) => {
+  state.viewFilterSubscribers.add(cb);
+  return () => {
+    state.viewFilterSubscribers.delete(cb);
+  };
+};
+
 // ── Logbook panel mount tracking ────────────────────────────────────────────
 // The app-level LogQsoPopup only opens for a "log this spot" request when no
 // LogbookPanel is mounted to consume it. Panels report their presence here
@@ -391,6 +509,9 @@ export const __resetLogbookForTests = () => {
   state.subscribers.clear();
   state.pendingPrefill = null;
   state.prefillSubscribers.clear();
+  state.tunedSpot = null;
+  state.viewFilter = { ...EMPTY_FILTER };
+  state.viewFilterSubscribers.clear();
   state.panelMounts = 0;
 };
 
@@ -408,6 +529,13 @@ export default {
   requestLogQso,
   consumePendingPrefill,
   subscribePrefill,
+  setTunedSpot,
+  tunedSpotForRig,
+  tunedSpotPrefill,
+  qsoMatchesFilter,
+  getViewFilter,
+  setViewFilter,
+  subscribeViewFilter,
   registerPanelMount,
   unregisterPanelMount,
   hasMountedPanel,

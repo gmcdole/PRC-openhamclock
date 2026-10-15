@@ -348,6 +348,133 @@ export const matchLotwConfirmations = (lotwRecords, localQsos) => {
 };
 
 /**
+ * Pull new QSOs from Wavelog into the native logbook.
+ *
+ * Wavelog's QSO primary key is used as the incremental cursor. The cursor is
+ * advanced only after the returned ADIF has been successfully persisted, so a
+ * failed import is safe to retry. Native-logbook dedup makes retries harmless.
+ */
+export const syncWavelogQsos = async ({ parseAdif }) => {
+  const cfg = getLogsyncConfig();
+  const wavelog = cfg.wavelog || {};
+
+  if (!wavelog.pullEnabled) {
+    throw new Error('Wavelog pull is not enabled');
+  }
+
+  const stationIds = Array.isArray(wavelog.pullStationIds)
+    ? wavelog.pullStationIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+    : [];
+
+  if (!wavelog.url || !wavelog.apiKey || stationIds.length === 0) {
+    throw new Error('Wavelog pull is not fully configured');
+  }
+
+  const state = getLogsyncState();
+  const limit = 2000;
+  let fetchFromId = Number(state.wavelogLastFetchedId) || 0;
+  let imported = 0;
+  let skipped = 0;
+  let fetched = 0;
+
+  while (true) {
+    const data = await postJson('/api/logsync/wavelog/pull', {
+      url: wavelog.url,
+      key: wavelog.apiKey,
+      stationIds,
+      fetchFromId,
+      limit,
+    });
+
+    const pageCount = Number(data.exportedQsos);
+    const lastFetchedId = Number(data.lastFetchedId);
+
+    if (!Number.isInteger(pageCount) || pageCount < 0 || pageCount > limit) {
+      throw new Error('Wavelog returned an invalid QSO count');
+    }
+
+    if (!Number.isSafeInteger(lastFetchedId) || lastFetchedId < fetchFromId) {
+      throw new Error('Wavelog returned an invalid QSO cursor');
+    }
+
+    if (pageCount > 0 && lastFetchedId === fetchFromId) {
+      throw new Error('Wavelog QSO cursor did not advance');
+    }
+
+    let pageImported = 0;
+    let pageSkipped = 0;
+
+    if (pageCount > 0) {
+      if (!data.adif) {
+        throw new Error('Wavelog returned QSOs without ADIF data');
+      }
+
+      const { qsos } = parseAdif(data.adif);
+      const result = await logbookStore.addMany(qsos, { strict: true });
+      pageImported = result.imported;
+      pageSkipped = result.skipped;
+
+      // Feed newly pulled, mappable QSOs to OpenHamClock's existing map layer.
+      // The API layer is intentionally temporary; the native logbook remains
+      // the persistent copy.
+      const mapQsos = qsos
+        .filter((qso) => qso.gridsquare)
+        .map((qso) => {
+          const date = String(qso.qso_date || '').replace(/-/g, '');
+          const time = String(qso.time_on || '').replace(/:/g, '');
+          const timestamp =
+            /^\d{8}$/.test(date) && /^\d{4,6}$/.test(time)
+              ? `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}T${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6) || '00'}Z`
+              : undefined;
+
+          return {
+            call: qso.call,
+            grid: qso.gridsquare,
+            freq: qso.freq,
+            band: qso.band,
+            mode: qso.mode,
+            timestamp,
+            label: 'Wavelog',
+          };
+        });
+
+      // Map arcs are best-effort. A visualization failure must not prevent the
+      // successfully persisted native logbook from advancing its Wavelog cursor.
+      try {
+        for (let i = 0; i < mapQsos.length; i += 100) {
+          await postJson('/api/qso-layer', { qsos: mapQsos.slice(i, i + 100) });
+        }
+      } catch (err) {
+        console.warn('Wavelog QSO map-layer update failed:', err);
+      }
+    }
+
+    imported += pageImported;
+    skipped += pageSkipped;
+    fetched += pageCount;
+
+    const result = {
+      imported,
+      skipped,
+      fetched,
+      lastFetchedId,
+      at: Date.now(),
+    };
+
+    // Persist each successfully imported page before requesting the next.
+    setLogsyncState({
+      wavelogLastFetchedId: lastFetchedId,
+      wavelogLastPullAt: result.at,
+      wavelogLastPullResult: result,
+    });
+    notify();
+
+    fetchFromId = lastFetchedId;
+    if (pageCount < limit) return result;
+  }
+};
+
+/**
  * Pull LoTW confirmations since the stored cursor and apply matches to the
  * local log. Enforces the 5-min cooldown. parseAdif is injected by the caller
  * (the UI already imports utils/adif) so tests can drive this with a stub.
@@ -414,6 +541,7 @@ export default {
   buildAdifRecord,
   qsoTimestamp,
   matchLotwConfirmations,
+  syncWavelogQsos,
   syncLotwConfirmations,
   lotwCooldownRemainingMs,
   testWavelog,

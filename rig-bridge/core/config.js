@@ -161,10 +161,11 @@ const DEFAULT_CONFIG = {
     beaconInterval: 600, // Seconds between position beacons (0 = disabled)
     symbol: '/-', // APRS symbol (/-  = house)
     verbose: false,
-    // Local forwarding: push received packets to the local OHC server's /api/aprs/local
-    // Set to false when using cloudRelay to avoid duplicate injection on the cloud server.
-    localForward: true,
-    ohcUrl: 'http://localhost:8080', // URL of the local OpenHamClock server
+    // Forward received frames to the OpenHamClock server so its station
+    // cache (and every browser) sees RF stations without a browser being
+    // attached to this rig-bridge (#1221).
+    serverForward: true,
+    ohcUrl: 'http://localhost:3000',
   },
   // Rotator control via rotctld (Hamlib)
   rotator: {

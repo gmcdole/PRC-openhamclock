@@ -78,3 +78,30 @@ describe('classifyFletcherRelays (#1165 follow-up — no paging on single blips)
     expect(classifyFletcherRelays(s, NOW).detail).toContain('no response');
   });
 });
+
+describe('per-upstream counters (watchtower daily SatNOGS false alarm)', () => {
+  const now = 1_700_000_000_000;
+  const base = { lastUpstreamErrorAt: now - 60_000, lastUpstreamOkAt: now - 120_000, lastUpstreamStatus: 0 };
+
+  it('SatNOGS-only failures report ok with a note', () => {
+    const v = classifyFletcherRelays(
+      { ...base, consecutiveUpstreamFails: 41, consecutiveFailsByUpstream: { satnogs: 41, celestrak: 0 } },
+      now,
+    );
+    expect(v.status).toBe('ok');
+    expect(v.detail).toMatch(/SatNOGS throttling/);
+  });
+
+  it('CelesTrak failures still degrade', () => {
+    const v = classifyFletcherRelays(
+      { ...base, consecutiveUpstreamFails: 3, consecutiveFailsByUpstream: { satnogs: 0, celestrak: 3 } },
+      now,
+    );
+    expect(v.status).toBe('degraded');
+  });
+
+  it('older fletcher without per-upstream counters keeps the global rule', () => {
+    const v = classifyFletcherRelays({ ...base, consecutiveUpstreamFails: 2 }, now);
+    expect(v.status).toBe('degraded');
+  });
+});

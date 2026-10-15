@@ -125,5 +125,5 @@ export const useEmcommData = (options = {}) => {
     };
   }, [enabled, fetchAlerts, fetchShelters, fetchDisasters]);
 
-  return { alerts, shelters, disasters, loading };
+  return { alerts, shelters, disasters, loading, state: resolvedStateRef.current?.state ?? null };
 };

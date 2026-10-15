@@ -197,11 +197,36 @@ function parseMice(destination, info) {
 function parseResourceTokens(comment) {
   if (!comment) return { tokens: [], cleanComment: '' };
   const tokens = [];
-  const regex = /\[([A-Za-z]+)\s+([^\]]+)\]/g;
-  let match;
-  while ((match = regex.exec(comment)) !== null) {
-    const key = match[1];
-    const val = match[2].trim();
+  const spans = [];
+  // Single forward pass instead of /\[([A-Za-z]+)\s+([^\]\s][^\]]*)\]/g — the
+  // regex form kept tripping CodeQL js/polynomial-redos on "[A" followed by
+  // a long run of spaces, because the global scan re-enters each candidate.
+  // Same grammar: "[" + letters + whitespace + value (first char not a space
+  // or "]") + "]"; the value runs to the first "]".
+  const n = comment.length;
+  const isLetter = (c) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+  const isSpace = (c) => c === 32 || (c >= 9 && c <= 13);
+  let i = 0;
+  while (i < n) {
+    if (comment.charCodeAt(i) !== 91 /* [ */) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < n && isLetter(comment.charCodeAt(j))) j++;
+    if (j === i + 1 || j >= n || !isSpace(comment.charCodeAt(j))) {
+      i++;
+      continue;
+    }
+    const key = comment.slice(i + 1, j);
+    while (j < n && isSpace(comment.charCodeAt(j))) j++;
+    if (j >= n || comment.charCodeAt(j) === 93 /* ] */) {
+      i++;
+      continue;
+    }
+    const close = comment.indexOf(']', j);
+    if (close < 0) break; // no closing bracket anywhere ahead — nothing more can match
+    const val = comment.slice(j, close).trim();
     const capacityMatch = val.match(/^(\d+)\/(\d+)$/);
     if (capacityMatch) {
       tokens.push({ key, current: parseInt(capacityMatch[1]), max: parseInt(capacityMatch[2]), type: 'capacity' });
@@ -216,8 +241,16 @@ function parseResourceTokens(comment) {
     } else {
       tokens.push({ key, value: val, type: 'text' });
     }
+    spans.push([i, close + 1]);
+    i = close + 1;
   }
-  const cleanComment = comment.replace(regex, '').trim();
+  let cleanComment = '';
+  let cursor = 0;
+  for (const [a, b] of spans) {
+    cleanComment += comment.slice(cursor, a);
+    cursor = b;
+  }
+  cleanComment = (cleanComment + comment.slice(cursor)).trim();
   return { tokens, cleanComment };
 }
 
@@ -228,7 +261,7 @@ function parseResourceTokens(comment) {
  * @param {string} line  "SRC>DEST,PATH:payload"
  * @returns {{ call, ssid, lat, lon, symbol, comment, tokens, cleanComment,
  *             speed, course, altitude, raw, packetType, positionAmbiguity,
- *             objectName?, itemName?, thirdPartyVia? } | null}
+ *             destination, objectName?, itemName?, thirdPartyVia? } | null}
  */
 function parseAprsPacket(line) {
   try {
@@ -251,7 +284,11 @@ function parseAprsPacket(line) {
         .split(',')[0]
         .replace(/\0/g, '')
         .trim();
-      payload = line.slice(headerEnd + 1).replace(/[\r\n]+$/, '');
+      payload = line.slice(headerEnd + 1);
+      // Trailing CR/LF trimmed by hand — /[\r\n]+$/ is polynomial on long runs of newlines
+      let end = payload.length;
+      while (end > 0 && (payload[end - 1] === '\n' || payload[end - 1] === '\r')) end--;
+      payload = payload.slice(0, end);
       if (payload.charAt(0) !== '}') break;
       thirdPartyVia.push(src);
       line = payload.slice(1);
@@ -326,6 +363,7 @@ function parseAprsPacket(line) {
       call: callsign,
       ssid,
       ...(name ? { sender: src } : {}),
+      destination,
       lat,
       lon,
       symbol: `${symbolTable}${symbolCode}`,

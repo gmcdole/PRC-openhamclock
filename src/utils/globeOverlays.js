@@ -680,6 +680,53 @@ export function paintHistoryPlayback(ctx, { width, height, opacity = 0.8, data }
 
 // note picks the id up automatically via GLOBE_OVERLAY_LAYER_IDS.
 // Ordered: rasters first, area fills, then lines, then point markers on top.
+/**
+ * APRS stations (#1210). data: { stations, watch, labels } — the map's station
+ * list, the watchlist Set and whether callsign tags are on. Same colours as
+ * the Leaflet markers: amber watched, green local RF, cyan internet.
+ */
+export function paintAprs(ctx, { width, height, opacity = 1, data }) {
+  const stations = data?.stations;
+  if (!Array.isArray(stations) || !stations.length) return;
+  const watch = data?.watch;
+  const k = width / 2048;
+  const scale = Number(data?.scale) > 0 ? Number(data.scale) : 1; // #1214
+  const dotStroke = Math.max(1, k);
+  const font = `${Math.max(9, Math.round(11 * k * scale))}px monospace`;
+  ctx.save();
+  ctx.lineWidth = dotStroke;
+  ctx.strokeStyle = `rgba(0,0,0,${opacity})`;
+  for (const st of stations) {
+    const lat = Number(st?.lat);
+    const lon = Number(st?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    const isWatched = !!(watch?.has?.(st.call) || watch?.has?.(st.ssid));
+    const rgb = isWatched ? '245,158,11' : st.source === 'local-tnc' ? '74,222,128' : '34,211,238';
+    const x = lonToX(lon, width);
+    const y = latToY(lat, height);
+    const r = (isWatched ? 4 : 3) * k * scale;
+    ctx.fillStyle = `rgba(${rgb},${opacity})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (data?.labels) {
+      const label = st.ssid || st.call;
+      if (label) {
+        ctx.font = font;
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = Math.max(2, 3 * k);
+        ctx.strokeStyle = `rgba(0,0,0,${opacity * 0.85})`;
+        ctx.strokeText(label, x + r + 2 * k, y);
+        ctx.fillText(label, x + r + 2 * k, y);
+        ctx.lineWidth = dotStroke;
+        ctx.strokeStyle = `rgba(0,0,0,${opacity})`;
+      }
+    }
+  }
+  ctx.restore();
+}
+
 export const GLOBE_OVERLAY_PAINTERS = {
   wxradar: paintWxRadar,
   drap: paintDrap,
@@ -694,10 +741,12 @@ export const GLOBE_OVERLAY_PAINTERS = {
   floods: paintFloods,
   'history-playback': paintHistoryPlayback,
   lightning: paintLightning,
+  aprs: paintAprs,
 };
 
-// Plugin layer ids the globe can draw itself. Aircraft has no canvas
-// painter — Globe3D renders it natively as instanced 3D models — but it
-// belongs here so its enabled/opacity state reaches Globe3D and it stays
-// out of WorldMap's suppressed-layers note (like satellites).
-export const GLOBE_OVERLAY_LAYER_IDS = [...Object.keys(GLOBE_OVERLAY_PAINTERS), 'aircraft'];
+// Plugin layer ids the globe can draw itself. Aircraft and Logbook QSOs have
+// no canvas painter — Globe3D renders them natively (instanced 3D models;
+// markers + great-circle arcs like DX spots) — but they belong here so their
+// enabled/opacity state reaches Globe3D and they stay out of WorldMap's
+// suppressed-layers note (like satellites).
+export const GLOBE_OVERLAY_LAYER_IDS = [...Object.keys(GLOBE_OVERLAY_PAINTERS), 'aircraft', 'logbook-qsos'];

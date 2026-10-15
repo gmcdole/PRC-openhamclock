@@ -18,9 +18,11 @@ import { useTranslation } from 'react-i18next';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { getBandColor, getBandFromFreq } from '../utils/callsign.js';
+import { getBandColorForBand, getEffectiveBandColors } from '../utils/bandColors.js';
 import { getSunPosition, getMoonPosition, getMoonAzEl, densifyGeoJson } from '../utils/geo.js';
 import { lzwDecode } from '../plugins/layers/useLightning.js';
 import { MAP_STYLES } from '../utils/config.js';
+import { MAP_FOCUS_EVENT, MAP_FOCUS_PULSE_MS } from '../utils/mapFocus.js';
 import { buildGlobeTexture, buildGlobeDetailPatch, chooseGlobeTileZoom } from '../utils/globeTexture.js';
 import {
   classifySatellite,
@@ -32,6 +34,7 @@ import { getSantaTemplate } from '../utils/santaModel.js';
 import { getSantaState, resolveSantaClock, destinationPoint, formatPresents } from '../utils/santa.js';
 import { GLOBE_OVERLAY_PAINTERS, ZONE_SOURCES, workedGridCounts, decimateAircraft } from '../utils/globeOverlays.js';
 import logbookStore from '../services/logbookStore.js';
+import { logbookLinesShown, useLogbookMapPoints } from '../utils/logbookMap.js';
 import {
   acquire as acquireHistory,
   release as releaseHistory,
@@ -413,6 +416,10 @@ export default function Globe3D({
   // { layerId: { enabled, opacity } } for the globe-capable plugin layers —
   // same states the flat map persists to openhamclock_mapSettings.layers.
   overlayLayerStates = null,
+  aprsStations = null,
+  aprsWatchlistCalls = null,
+  showAPRSLabels = false,
+  aprsIconScale = 1,
   allUnits = { dist: 'imperial' },
   config,
   hideUi = false,
@@ -465,6 +472,79 @@ export default function Globe3D({
       }
     }, delay);
   }, []);
+  // "Bring this station into view" requests from panel rows (#1182/#1210):
+  // swing the camera to the target over ~0.7 s, keeping its distance, and
+  // drop a pulse ring on the surface for as long as the flat map's ring lives.
+  const focusRef = useRef(null);
+  useEffect(() => {
+    const clearFocus = () => {
+      const f = focusRef.current;
+      if (!f) return;
+      cancelAnimationFrame(f.raf);
+      const s = gl.current;
+      if (s?.scene) s.scene.remove(f.ring);
+      f.geo.dispose();
+      f.mat.dispose();
+      focusRef.current = null;
+      s?.requestRender?.();
+    };
+    const onFocus = (e) => {
+      const s = gl.current;
+      const d = e?.detail;
+      if (!s?.camera || !s.controls || !s.scene || !d) return;
+      if (!Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+      clearFocus();
+      kickIdleTimer(); // a focus counts as presence: stop auto-rotate for a while
+
+      const dist = s.camera.position.length();
+      const fromDir = s.camera.position.clone().normalize();
+      const toDir = latLonToVec3(d.lat, d.lon, 1).normalize();
+      const swing = new THREE.Quaternion().setFromUnitVectors(fromDir, toDir);
+      const identity = new THREE.Quaternion();
+
+      const geo = new THREE.RingGeometry(0.018, 0.026, 48);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x22d3ee,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const ring = new THREE.Mesh(geo, mat);
+      ring.position.copy(latLonToVec3(d.lat, d.lon, EARTH_R * 1.004));
+      ring.lookAt(0, 0, 0);
+      ring.renderOrder = 50;
+      s.scene.add(ring);
+
+      const SWING_MS = 700;
+      const RING_PERIOD_MS = 1300; // matches the CSS ring animation on the flat map
+      const start = performance.now();
+      const step = (now) => {
+        const s2 = gl.current;
+        if (!s2?.camera) return clearFocus();
+        const elapsed = now - start;
+        if (elapsed <= SWING_MS) {
+          const t = Math.min(1, elapsed / SWING_MS);
+          const k = t * t * (3 - 2 * t);
+          const dir = fromDir.clone().applyQuaternion(identity.clone().slerp(swing, k));
+          s2.camera.position.copy(dir.multiplyScalar(dist));
+          s2.controls.update();
+        }
+        const phase = (elapsed % RING_PERIOD_MS) / RING_PERIOD_MS;
+        ring.scale.setScalar(1 + phase * 3);
+        mat.opacity = 0.95 * (1 - phase);
+        s2.requestRender?.();
+        if (elapsed >= MAP_FOCUS_PULSE_MS) return clearFocus();
+        focusRef.current.raf = requestAnimationFrame(step);
+      };
+      focusRef.current = { raf: requestAnimationFrame(step), ring, geo, mat };
+    };
+    window.addEventListener(MAP_FOCUS_EVENT, onFocus);
+    return () => {
+      window.removeEventListener(MAP_FOCUS_EVENT, onFocus);
+      clearFocus();
+    };
+  }, [kickIdleTimer]);
   const [textureLoading, setTextureLoading] = useState(true);
   // One-way per-session detail upgrade: once the camera has been close enough
   // that tile resolution visibly limits the basemap (labels pixelate), the
@@ -490,6 +570,13 @@ export default function Globe3D({
   // config.lowMemoryMode arrives asynchronously as undefined then false;
   // normalising stops that flip from rebuilding the entire WebGL scene.
   const lowMem = !!lowMemoryMode;
+  // Logbook QSOs layer: drawn natively like DX spots (markers + arcs from DE),
+  // from the same points as the flat layer — live log + the Logbook panel's
+  // filter (utils/logbookMap.js).
+  const logbookLayer = overlayLayerStates?.['logbook-qsos'];
+  const logbookOn = !lowMem && !!logbookLayer?.enabled;
+  const logbookOpacity = logbookLayer?.opacity ?? 0.8;
+  const logbookPoints = useLogbookMapPoints(logbookOn);
   const [panelWidth, setPanelWidth] = useState(0);
   // WebGL construction failure, rethrown during render so WorldMap's error
   // boundary can fall back to Mercator. Swallowing it here left the user on a
@@ -668,8 +755,34 @@ export default function Globe3D({
       });
     }
 
+    // Logbook QSOs: one dot per worked position and band. Clicking sets DX
+    // only — `raw` carries no frequency, so a past QSO never retunes the rig.
+    if (logbookOn) {
+      const palette = getEffectiveBandColors(); // once, not per dot
+      logbookPoints.forEach((p) => {
+        const latest = p.qsos.reduce((a, b) =>
+          `${b.qso_date || ''}${b.time_on || ''}` > `${a.qso_date || ''}${a.time_on || ''}` ? b : a,
+        );
+        const more = p.qsos.length > 1 ? ` +${p.qsos.length - 1}` : '';
+        out.push({
+          lat: p.lat,
+          lon: p.lon,
+          color: getBandColorForBand(p.band, palette),
+          size: p.qsos.length > 1 ? 8 : 7,
+          kind: 'QSO',
+          label: `${latest.call}${more}`,
+          detail: [p.band, latest.mode, p.approx ? `${p.place} (country position)` : p.place]
+            .filter(Boolean)
+            .join(' · '),
+          raw: { lat: p.lat, lon: p.lon, call: latest.call },
+        });
+      });
+    }
+
     return out;
   }, [
+    logbookOn,
+    logbookPoints,
     potaSpots,
     wwffSpots,
     sotaSpots,
@@ -728,6 +841,20 @@ export default function Globe3D({
       });
     }
 
+    // Logbook QSOs: DE → each worked position, band-coloured — only while
+    // they stay readable (see MAX_LOGBOOK_LINES); the dots always show.
+    if (logbookOn && hasDE && logbookLinesShown(logbookPoints.length)) {
+      const palette = getEffectiveBandColors(); // once, not per arc
+      logbookPoints.forEach((p) => {
+        out.push({
+          from: [lat0, lon0],
+          to: [p.lat, p.lon],
+          color: getBandColorForBand(p.band, palette),
+          opacity: logbookOpacity * 0.8, // 0.64 at the default, like the cluster arcs
+        });
+      });
+    }
+
     // The DE→DX arc exists to connect the two station markers, so it hides
     // with them — unlike the cluster paths, which have their own toggle.
     if (showDeDxMarkers && Number.isFinite(dxLocation?.lat) && Number.isFinite(dxLocation?.lon)) {
@@ -742,6 +869,10 @@ export default function Globe3D({
     return out;
     // themeTick: the DE→DX arc colour is read from a CSS variable.
   }, [
+    logbookOn,
+    logbookPoints,
+    logbookOpacity,
+    hasDE,
     dxPaths,
     showDXPaths,
     bandPassesMapFilter,
@@ -2249,6 +2380,7 @@ export default function Globe3D({
       'tornado-warnings': overlayTornado,
       'atc-sectors': overlayATC,
       'history-playback': overlayHistory,
+      aprs: { stations: aprsStations, watch: aprsWatchlistCalls, labels: showAPRSLabels, scale: aprsIconScale },
     };
     let painted = false;
     for (const [id, painter] of Object.entries(GLOBE_OVERLAY_PAINTERS)) {
@@ -2279,6 +2411,10 @@ export default function Globe3D({
     overlayTornado,
     overlayATC,
     overlayHistory,
+    aprsStations,
+    aprsWatchlistCalls,
+    showAPRSLabels,
+    aprsIconScale,
     lowMem,
   ]);
 

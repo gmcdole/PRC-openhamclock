@@ -6,6 +6,8 @@
 const net = require('net');
 
 const { parseAprsPacket: parseAprsPosition, parseResourceTokens } = require('../utils/aprsParser');
+const { identifyDevice } = require('../utils/aprsDeviceId');
+const { parseAprsMessage, messagesForStation } = require('../utils/aprsMessage');
 
 module.exports = function (app, ctx) {
   const { CONFIG, APP_VERSION, logDebug, logInfo, logWarn, logErrorOnce } = ctx;
@@ -128,70 +130,6 @@ module.exports = function (app, ctx) {
   // Parse APRS message packets (addressed messages + bulletins)
   // Format: :ADDRESSEE:message text{msgid
   // Bulletins: :BLN1     :bulletin text
-  function parseAprsMessage(line) {
-    try {
-      const headerEnd = line.indexOf(':');
-      if (headerEnd < 0) return null;
-
-      const header = line.substring(0, headerEnd);
-      const payload = line.substring(headerEnd + 1);
-      const from = header.split('>')[0].trim();
-
-      // APRS message format: :ADDRESSEE:message{id
-      if (payload.charAt(0) !== ':') return null;
-      const addrEnd = payload.indexOf(':', 1);
-      if (addrEnd < 0) return null;
-
-      const to = payload.substring(1, addrEnd).trim();
-      const body = payload.substring(addrEnd + 1);
-
-      // Extract message ID if present
-      const idMatch = body.match(/\{(\w+)$/);
-      const msgId = idMatch ? idMatch[1] : null;
-      const text = idMatch ? body.substring(0, body.lastIndexOf('{')).trim() : body.trim();
-
-      // Skip acks/rejs
-      if (text.startsWith('ack') || text.startsWith('rej')) return null;
-
-      const isBulletin = to.startsWith('BLN');
-      const { tokens, cleanComment } = parseResourceTokens(text);
-
-      // Detect shelter-related content
-      const isShelterReport =
-        /shelter|evacuate|refuge|beds|capacity|open|closed|accepting/i.test(text) ||
-        tokens.some((t) => ['Beds', 'Capacity', 'Shelter', 'Evacuees'].includes(t.key));
-
-      // Detect net check-in/check-out commands (messages to EMCOMM)
-      let netCommand = null;
-      if (to.toUpperCase() === 'EMCOMM' || to.toUpperCase().startsWith('EMCOMM')) {
-        const upper = text.toUpperCase().trim();
-        const cqMatch = upper.match(/^CQ\s+(\S+)\s*(.*)/);
-        const uMatch = upper.match(/^U\s+(\S+)/);
-        if (cqMatch) {
-          netCommand = { action: 'checkin', netName: cqMatch[1], status: cqMatch[2] || '' };
-        } else if (uMatch) {
-          netCommand = { action: 'checkout', netName: uMatch[1] };
-        }
-      }
-
-      return {
-        type: isBulletin ? 'bulletin' : 'message',
-        from,
-        to,
-        text,
-        cleanText: cleanComment,
-        tokens,
-        msgId,
-        isShelterReport,
-        netCommand,
-        timestamp: Date.now(),
-        raw: line,
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
   // Parse a raw APRS packet into a position object (or null if not a position packet)
   /**
    * Position packets go through the shared parser (server/utils/aprsParser.js —
@@ -200,7 +138,42 @@ module.exports = function (app, ctx) {
    */
   function parseAprsPacket(line) {
     const station = parseAprsPosition(line);
-    return station ? { ...station, timestamp: Date.now() } : null;
+    if (!station) return null;
+    // Radio/software identification (#1202): tocall for ordinary packets,
+    // Mic-E type bytes for Mic-E — which are also stripped from the comment
+    // so the panel no longer shows them as stray punctuation.
+    const { device, comment } = identifyDevice(station);
+    if (comment !== station.comment) {
+      const { tokens, cleanComment } = parseResourceTokens(comment);
+      Object.assign(station, { comment, tokens, cleanComment });
+    }
+    return { ...station, device, timestamp: Date.now() };
+  }
+
+  // Net check-in / check-out from a parsed message. Shared by the APRS-IS
+  // feed and the local-TNC path: until #1212 only the internet path applied
+  // the command, so a `CQ NETNAME` heard over RF never reached the roster.
+  function applyNetCommand(msg) {
+    if (!msg?.netCommand) return;
+    const { action, netName, status } = msg.netCommand;
+    if (action === 'checkin') {
+      const station = aprsStations.get(msg.from) || aprsStations.get(msg.from.split('-')[0]) || {};
+      netRoster.set(msg.from, {
+        call: msg.from,
+        netName,
+        status: status || 'Checked in',
+        checkinTime: Date.now(),
+        lastHeard: Date.now(),
+        lat: station.lat ?? null,
+        lon: station.lon ?? null,
+        tokens: station.tokens || [],
+        source: msg.source || station.source || null,
+      });
+      logInfo(`[APRS Net] ${msg.from} checked into ${netName}: ${status || '(no status)'}`);
+    } else if (action === 'checkout') {
+      netRoster.delete(msg.from);
+      logInfo(`[APRS Net] ${msg.from} checked out of ${netName}`);
+    }
   }
 
   function connectAprsIS() {
@@ -274,28 +247,7 @@ module.exports = function (app, ctx) {
             if (msg.isShelterReport) {
               logDebug(`[APRS] Shelter report from ${msg.from}: ${msg.text}`);
             }
-            // Handle net check-in/check-out
-            if (msg.netCommand) {
-              const { action, netName, status } = msg.netCommand;
-              if (action === 'checkin') {
-                const station = aprsStations.get(msg.from.split('-')[0]) || {};
-                netRoster.set(msg.from, {
-                  call: msg.from,
-                  netName,
-                  status: status || 'Checked in',
-                  checkinTime: Date.now(),
-                  lastHeard: Date.now(),
-                  lat: station.lat ?? null,
-                  lon: station.lon ?? null,
-                  tokens: station.tokens || [],
-                  source: station.source || null,
-                });
-                logInfo(`[APRS Net] ${msg.from} checked into ${netName}: ${status || '(no status)'}`);
-              } else if (action === 'checkout') {
-                netRoster.delete(msg.from);
-                logInfo(`[APRS Net] ${msg.from} checked out of ${netName}`);
-              }
-            }
+            applyNetCommand(msg);
           }
         }
       }
@@ -353,6 +305,7 @@ module.exports = function (app, ctx) {
           speed: station.speed,
           course: station.course,
           altitude: station.altitude,
+          device: station.device ?? null,
           age: Math.floor((Date.now() - station.timestamp) / 60000),
           timestamp: station.timestamp,
           source: station.source ?? null,
@@ -381,6 +334,14 @@ module.exports = function (app, ctx) {
       count: msgs.length,
       messages: msgs,
     });
+  });
+
+  // REST endpoint: GET /api/aprs/messages/history?call=KE8PLM-9 — both directions, newest first (#1216)
+  app.get('/api/aprs/messages/history', (req, res) => {
+    const call = String(req.query.call || '').trim();
+    if (!call) return res.status(400).json({ error: 'call parameter required' });
+    const messages = messagesForStation(aprsMessages, call);
+    res.json({ call: call.toUpperCase(), count: messages.length, messages });
   });
 
   // Find a heard position for a reporting station (exact SSID first, then base call)
@@ -533,6 +494,24 @@ module.exports = function (app, ctx) {
         body: JSON.stringify({ to, message }),
       });
       if (response.ok) {
+        // Keep our own side of the conversation so a station's message
+        // history shows both directions (#1216). Rig-bridge only transmits.
+        aprsMessages.push({
+          type: 'message',
+          from: (CONFIG.callsign || 'N0CALL').toUpperCase(),
+          to: String(to).trim().toUpperCase(),
+          text: message,
+          cleanText: message,
+          tokens: [],
+          msgId: null,
+          isShelterReport: false,
+          netCommand: null,
+          direction: 'sent',
+          source: 'local-tnc',
+          timestamp: Date.now(),
+          raw: null,
+        });
+        if (aprsMessages.length > APRS_MAX_MESSAGES) aprsMessages.shift();
         return res.json({ ok: true, via: 'rig-bridge' });
       }
       const err = await response.text();
@@ -588,6 +567,25 @@ module.exports = function (app, ctx) {
 
   // REST endpoint: POST /api/aprs/local — inject local TNC packets (from cloud relay)
   // Accepts raw APRS info strings and parses them into station objects.
+  // The same RF frame can reach us twice — from rig-bridge directly (#1221)
+  // and from a browser's forwarding (#1212). Identical frames inside this
+  // window are counted once; a real re-beacon is minutes apart.
+  const recentLocalFrames = new Map();
+  const LOCAL_FRAME_DEDUPE_MS = 15000;
+  function isDuplicateLocalFrame(pkt) {
+    const key = `${pkt.source}|${pkt.destination || ''}|${pkt.info}`;
+    const now = Date.now();
+    const seen = recentLocalFrames.get(key);
+    if (seen && now - seen < LOCAL_FRAME_DEDUPE_MS) return true;
+    recentLocalFrames.set(key, now);
+    if (recentLocalFrames.size > 2000) {
+      for (const [k, t] of recentLocalFrames) {
+        if (now - t >= LOCAL_FRAME_DEDUPE_MS) recentLocalFrames.delete(k);
+      }
+    }
+    return false;
+  }
+
   app.post('/api/aprs/local', (req, res) => {
     const packets = req.body.packets;
     if (!Array.isArray(packets)) {
@@ -595,8 +593,13 @@ module.exports = function (app, ctx) {
     }
 
     let added = 0;
+    let duplicates = 0;
     for (const pkt of packets) {
       if (!pkt.source || !pkt.info) continue;
+      if (isDuplicateLocalFrame(pkt)) {
+        duplicates++;
+        continue;
+      }
 
       // Reconstruct a raw APRS line so parseAprsPacket can handle it
       const rawLine = `${pkt.source}>${pkt.destination || 'APRS'}:${pkt.info}`;
@@ -617,6 +620,7 @@ module.exports = function (app, ctx) {
           msg.source = 'local-tnc';
           aprsMessages.push(msg);
           if (aprsMessages.length > APRS_MAX_MESSAGES) aprsMessages.shift();
+          applyNetCommand(msg);
         }
         continue;
       }
@@ -651,6 +655,6 @@ module.exports = function (app, ctx) {
     }
 
     logDebug(`[APRS] Ingested ${added} local TNC packets (${packets.length} received)`);
-    res.json({ ok: true, added });
+    res.json({ ok: true, added, duplicates });
   });
 };

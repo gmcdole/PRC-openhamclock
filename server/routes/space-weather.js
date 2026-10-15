@@ -4,6 +4,7 @@
  */
 
 const { fetchFreshestImage, parseLastModified } = require('../utils/solarImageFreshness');
+const { toNasaHttpsUrl } = require('../utils/nasaImageUrl');
 
 module.exports = function (app, ctx) {
   const { fetch, logDebug, logInfo, logWarn, logErrorOnce, APP_VERSION } = ctx;
@@ -599,26 +600,12 @@ module.exports = function (app, ctx) {
       timestamp: Date.now(),
     };
 
-    const isValidNasaImageUrl = (url) => {
-      if (!url) return false;
-
-      let parsed;
-      try {
-        parsed = new URL(url);
-      } catch {
-        return false; // not a valid URL at all
-      }
-
-      if (parsed.protocol !== 'https:') return false;
-      if (!parsed.hostname.endsWith('.nasa.gov')) return false;
-      return true;
-    };
-
-    const imageUrl = meta?.image?.url;
-    if (!imageUrl) throw new Error('No image URL in Dial-A-Moon response');
-    if (!isValidNasaImageUrl(imageUrl)) {
-      throw new Error(`Rejected non-NASA URL: \'${imageUrl}\'`);
-    }
+    // Dial-A-Moon returns http:// image URLs since Oct 2026; accept either
+    // scheme on *.nasa.gov and always fetch over https (utils/nasaImageUrl.js).
+    const rawImageUrl = meta?.image?.url;
+    if (!rawImageUrl) throw new Error('No image URL in Dial-A-Moon response');
+    const imageUrl = toNasaHttpsUrl(rawImageUrl);
+    if (!imageUrl) throw new Error(`Rejected non-NASA URL: '${rawImageUrl}'`);
 
     const imgResponse = await fetch(imageUrl, { signal: AbortSignal.timeout(20000) });
     if (!imgResponse.ok) throw new Error(`Moon image fetch returned ${imgResponse.status}`);

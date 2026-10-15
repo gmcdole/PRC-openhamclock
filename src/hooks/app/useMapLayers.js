@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { syncAllSettingsToServer } from '../../utils';
 
+export const APRS_ICON_SCALES = [0.75, 1, 1.25, 1.5, 2];
+
 export default function useMapLayers() {
   const defaults = {
     showDeDxMarkers: true,
@@ -21,6 +23,8 @@ export default function useMapLayers() {
     showDXNews: true,
     showRotatorBearing: false,
     showAPRS: true,
+    showAPRSLabels: false,
+    aprsIconScale: 1, // APRS symbol + tag size multiplier (#1214)
     showMeshCom: true,
   };
 
@@ -101,6 +105,24 @@ export default function useMapLayers() {
     [],
   );
   const toggleAPRS = useCallback(() => setMapLayers((prev) => ({ ...prev, showAPRS: !prev.showAPRS })), []);
+  const toggleAPRSLabels = useCallback(
+    () => setMapLayers((prev) => ({ ...prev, showAPRSLabels: !prev.showAPRSLabels })),
+    [],
+  );
+  const setAprsIconScale = useCallback(
+    (v) => setMapLayers((prev) => ({ ...prev, aprsIconScale: Math.min(2, Math.max(0.75, Number(v) || 1)) })),
+    [],
+  );
+  // Click-to-cycle: 1 → 1.25 → 1.5 → 2 → 0.75 → 1 …
+  const cycleAprsIconScale = useCallback(
+    () =>
+      setMapLayers((prev) => {
+        const steps = APRS_ICON_SCALES;
+        const i = steps.indexOf(Number(prev.aprsIconScale) || 1);
+        return { ...prev, aprsIconScale: steps[(i + 1) % steps.length] };
+      }),
+    [],
+  );
   const toggleMeshCom = useCallback(() => setMapLayers((prev) => ({ ...prev, showMeshCom: !prev.showMeshCom })), []);
 
   return {
@@ -124,6 +146,9 @@ export default function useMapLayers() {
     toggleDXNews,
     toggleRotatorBearing,
     toggleAPRS,
+    toggleAPRSLabels,
+    setAprsIconScale,
+    cycleAprsIconScale,
     toggleMeshCom,
   };
 }

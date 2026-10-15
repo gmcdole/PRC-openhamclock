@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseAprsPacket, parseMice, MICE_TYPES } from './aprsParser.js';
+import { parseAprsPacket, parseMice, parseResourceTokens, MICE_TYPES } from './aprsParser.js';
 
 // Expected values cross-checked with aprslib (the reference Python parser)
 // wherever it supports the format; third-party and item formats follow APRS 1.01.
@@ -210,5 +210,29 @@ describe('rig-bridge copy stays in step', () => {
     const server = strip(fs.readFileSync(path.join(root, 'server/utils/aprsParser.js'), 'utf8'));
     const bridge = strip(fs.readFileSync(path.join(root, 'rig-bridge/lib/aprs-parser.js'), 'utf8'));
     expect(bridge).toBe(server);
+  });
+});
+
+describe('pathological input stays fast (CodeQL js/polynomial-redos)', () => {
+  it('resource tokens: "[A" followed by 50k spaces and no closing bracket', () => {
+    const t0 = Date.now();
+    const r = parseResourceTokens('[A' + ' '.repeat(50000) + 'x');
+    expect(Date.now() - t0).toBeLessThan(200);
+    expect(r.tokens).toEqual([]);
+    const ok = parseResourceTokens('go [Beds 12/20] and [Water OK] now');
+    expect(ok.tokens.map((t) => t.key)).toEqual(['Beds', 'Water']);
+    expect(ok.cleanComment).toBe('go  and  now');
+  });
+
+  it('long runs of spaces inside a bracket token and long newline tails parse in bounded time', () => {
+    const spaces = `N8TAG-12>SXUX4Y:\`p+5l!![/[A${' '.repeat(20000)}x`;
+    const newlines = `N0CALL-9>APRS:!3858.49N/08415.25W>test${'\n'.repeat(8000)}`;
+    const t0 = performance.now();
+    parseAprsPacket(spaces);
+    const s = parseAprsPacket(newlines);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(s.comment).toBe('test');
+    // tokens with ordinary spacing still parse
+    expect(parseAprsPacket('N8TAG-12>SXUX4Y:\`p+5l!![/[Beds   12/20] [Water OK]').tokens).toHaveLength(2);
   });
 });

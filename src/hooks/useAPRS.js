@@ -7,6 +7,10 @@
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { apiFetch } from '../utils/apiFetch';
+
+// RF frames from the rig-bridge SSE are also posted to the server (#1212)
+const RF_FORWARD_DEBOUNCE_MS = 1000;
+const RF_FORWARD_BATCH_MAX = 200;
 import {
   DWELL_OPTIONS_MINUTES,
   RF_STORE_KEY,
@@ -50,6 +54,8 @@ export const useAPRS = (options = {}) => {
   // Persisted: these never reach the server, so without this a page refresh
   // wiped every RF symbol off the map (#1190).
   const [rfStations, setRfStations] = useState(() => loadStations(RF_STORE_KEY, retentionOpts()));
+  const forwardQueueRef = useRef([]); // RF frames waiting to be posted to /api/aprs/local
+  const forwardTimerRef = useRef(null);
 
   const [connected, setConnected] = useState(false);
   const [aprsEnabled, setAprsEnabled] = useState(false);
@@ -228,6 +234,32 @@ export const useAPRS = (options = {}) => {
       if (msg.event !== 'aprs') return;
 
       const pkt = msg.data;
+      // Hand every RF frame to the server as well (#1212). In local mode the
+      // TNC feed reaches only this browser, so without this the server never
+      // saw RF messages, telemetry or net check-ins — `CQ NETNAME` heard over
+      // the air could not appear in the Net Roster. Same payload shape the
+      // cloud relay posts; batched so a busy channel is one request a second.
+      if (pkt?.source && pkt?.info) {
+        forwardQueueRef.current.push({
+          source: pkt.source,
+          destination: pkt.destination,
+          digipeaters: pkt.digipeaters,
+          info: pkt.info,
+          timestamp: pkt.timestamp ?? Date.now(),
+        });
+        if (!forwardTimerRef.current) {
+          forwardTimerRef.current = setTimeout(() => {
+            forwardTimerRef.current = null;
+            const packets = forwardQueueRef.current.splice(0, RF_FORWARD_BATCH_MAX);
+            if (!packets.length) return;
+            apiFetch('/api/aprs/local', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ packets }),
+            }).catch(() => {}); // best effort — the RF map does not depend on it
+          }, RF_FORWARD_DEBOUNCE_MS);
+        }
+      }
       // Only add to RF store if the packet was successfully parsed (has lat/lon)
       if (pkt.lat == null || pkt.lon == null) return;
 
@@ -250,7 +282,11 @@ export const useAPRS = (options = {}) => {
       setLoading(false);
     };
     window.addEventListener('rig-plugin-data', handler);
-    return () => window.removeEventListener('rig-plugin-data', handler);
+    return () => {
+      window.removeEventListener('rig-plugin-data', handler);
+      clearTimeout(forwardTimerRef.current);
+      forwardTimerRef.current = null;
+    };
   }, [enabled]);
 
   // Merge internet stations with local RF stations.

@@ -3,6 +3,7 @@
  * Map with range rings + NWS/FEMA overlays, sidebar with structured panels
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { APRS_HISTORY_EVENT } from '../utils/aprsSelect.js';
 import { useTranslation } from 'react-i18next';
 import { WorldMap, APRSTelemetryPanel } from '../components';
 import { useAPRSTelemetry } from '../hooks/useAPRSTelemetry.js';
@@ -208,6 +209,8 @@ export default function EmcommLayout(props) {
     handleToggleDxLock,
     mapLayers,
     toggleDXLabels,
+    toggleAPRSLabels,
+    cycleAprsIconScale,
     toggleSatellites,
     hoveredSpot,
     setHoveredSpot,
@@ -224,7 +227,6 @@ export default function EmcommLayout(props) {
   } = props;
 
   const { t } = useTranslation();
-  const [seconds, setSeconds] = useState(() => String(new Date().getUTCSeconds()).padStart(2, '0'));
   const [expandedAlert, setExpandedAlert] = useState(null);
   // Sidebar section collapse state (#1188)
   const [panelMode, setPanelMode] = useState(readPanelMode);
@@ -261,6 +263,29 @@ export default function EmcommLayout(props) {
   // APRS telemetry (sensor dashboards)
   const { telemetry } = useAPRSTelemetry({ enabled: true });
   const [messageTarget, setMessageTarget] = useState(null); // callsign to message
+  // Per-station message history (#1216): opened from a roster row (hover or
+  // HIST), an EmComm station row, or a map popup's "Messages" link.
+  const [historyTarget, setHistoryTarget] = useState(null);
+  const [historyMsgs, setHistoryMsgs] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const historyHoverRef = useRef(null);
+  // Map filter (#1215): only recognised EmComm symbols and Net Roster
+  // stations. Remembered per browser.
+  const [emcommOnly, setEmcommOnly] = useState(() => {
+    try {
+      return localStorage.getItem('openhamclock_emcommMapEmcommOnly') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleEmcommOnly = useCallback(() => {
+    setEmcommOnly((v) => {
+      try {
+        localStorage.setItem('openhamclock_emcommMapEmcommOnly', v ? '0' : '1');
+      } catch {}
+      return !v;
+    });
+  }, []);
   const [messageText, setMessageText] = useState('');
   // Nearby Winlink gateways
   const [winlinkRows, setWinlinkRows] = useState([]);
@@ -279,14 +304,6 @@ export default function EmcommLayout(props) {
   const msgSinceRef = useRef(sessionStartRef.current);
   const mapInstanceRef = useRef(null);
   const overlayLayersRef = useRef([]);
-
-  // UTC seconds ticker
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSeconds(String(new Date().getUTCSeconds()).padStart(2, '0'));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Fetch the Winlink gateway list once on mount and refresh hourly. The
   // server proxy already caches for 1h so this is essentially free; we use
@@ -400,11 +417,44 @@ export default function EmcommLayout(props) {
   // unfiltered hook output, so "RF Only" still plotted internet stations
   // (#1175).
   const mapAprsStations = useMemo(() => {
-    const base = aprsData?.filteredStations || [];
-    if (aprsSource === 'rf') return base.filter((s) => s.source === 'local-tnc');
-    if (aprsSource === 'internet') return base.filter((s) => s.source !== 'local-tnc');
-    return base;
-  }, [aprsData?.filteredStations, aprsSource]);
+    let base = aprsData?.filteredStations || [];
+    if (aprsSource === 'rf') base = base.filter((s) => s.source === 'local-tnc');
+    else if (aprsSource === 'internet') base = base.filter((s) => s.source !== 'local-tnc');
+    if (!emcommOnly) return base;
+    // EmComm-only (#1215): keep recognised EmComm symbols and anyone in the
+    // Net Roster. A roster station whose beacon has aged out of the station
+    // list but whose position the roster still knows is put back on the map
+    // from the roster entry, so checking in never makes a station vanish.
+    const rosterKeys = new Set();
+    for (const op of netRoster) {
+      if (!op?.call) continue;
+      rosterKeys.add(op.call.toUpperCase());
+      rosterKeys.add(op.call.toUpperCase().split('-')[0]);
+    }
+    const kept = base.filter(
+      (s) =>
+        (s.symbol && EMCOMM_SYMBOLS.has(s.symbol)) ||
+        rosterKeys.has(String(s.ssid || '').toUpperCase()) ||
+        rosterKeys.has(String(s.call || '').toUpperCase()),
+    );
+    const present = new Set(kept.map((s) => String(s.ssid || s.call).toUpperCase()));
+    for (const op of netRoster) {
+      if (!op?.call || op.lat == null || op.lon == null) continue;
+      if (present.has(op.call.toUpperCase())) continue;
+      kept.push({
+        call: op.call.split('-')[0],
+        ssid: op.call,
+        lat: op.lat,
+        lon: op.lon,
+        symbol: '/-',
+        comment: `Net ${op.netName || ''}${op.status ? ` · ${op.status}` : ''}`.trim(),
+        timestamp: op.lastHeard || op.checkinTime || Date.now(),
+        source: op.source === 'local-tnc' ? 'local-tnc' : null,
+        fromRoster: true,
+      });
+    }
+    return kept;
+  }, [aprsData?.filteredStations, aprsSource, emcommOnly, netRoster]);
 
   // Apply APRS source filter
   const aprsStations = useMemo(() => {
@@ -796,6 +846,77 @@ export default function EmcommLayout(props) {
   // Bring a panel row's target (shelter, station, gateway, roster op, field
   // report) into view: always pans, zooms to 10, pulses the target (#1182).
   // Rows without a position (roster ops never heard on APRS) are a no-op.
+  const openHistory = useCallback(
+    async (call) => {
+      const key = String(call || '').trim();
+      if (!key) return;
+      setHistoryTarget(key);
+      setHistoryLoading(true);
+      try {
+        const res = await apiFetch(`/api/aprs/messages/history?call=${encodeURIComponent(key)}`, {
+          cache: 'no-store',
+        });
+        const data = res?.ok ? await res.json() : { messages: [] };
+        const server = Array.isArray(data.messages) ? data.messages : [];
+        // Messages we sent before the server started keeping its own side
+        // live only in the Event Log; merge those that the server lacks.
+        const upper = key.toUpperCase();
+        const base = upper.split('-')[0];
+        const fromLog = (eventLog || [])
+          .filter((ev) => ev.type === 'aprs_msg_sent' && typeof ev.summary === 'string')
+          .map((ev) => ({
+            ev,
+            to: ev.summary
+              .replace(/^Message to\s+/i, '')
+              .trim()
+              .toUpperCase(),
+          }))
+          .filter(({ to }) => to === upper || to.split('-')[0] === base)
+          .map(({ ev, to }) => ({
+            from: ev.callsign,
+            to,
+            text: ev.details || '',
+            timestamp: ev.ts,
+            direction: 'sent',
+            source: 'log',
+          }));
+        const seen = new Set(server.map((m) => `${m.direction}|${m.text}|${Math.round((m.timestamp || 0) / 60000)}`));
+        const merged = [...server];
+        for (const m of fromLog) {
+          const k = `sent|${m.text}|${Math.round((m.timestamp || 0) / 60000)}`;
+          if (!seen.has(k)) merged.push(m);
+        }
+        merged.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        setHistoryMsgs(merged);
+      } catch {
+        setHistoryMsgs([]);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [eventLog],
+  );
+  const scheduleHistoryHover = useCallback(
+    (call) => {
+      clearTimeout(historyHoverRef.current);
+      historyHoverRef.current = setTimeout(() => openHistory(call), 450);
+    },
+    [openHistory],
+  );
+
+  // "Messages ↗" in an APRS map popup → open that station's history (#1216).
+  // Declared after openHistory: the deps array is evaluated during render,
+  // so placing it earlier threw "Cannot access 'openHistory' before
+  // initialization" and crashed the whole EmComm layout (#1223).
+  useEffect(() => {
+    const onReq = (e) => {
+      if (e?.detail?.call) openHistory(e.detail.call);
+    };
+    window.addEventListener(APRS_HISTORY_EVENT, onReq);
+    return () => window.removeEventListener(APRS_HISTORY_EVENT, onReq);
+  }, [openHistory]);
+  const cancelHistoryHover = useCallback(() => clearTimeout(historyHoverRef.current), []);
+
   const panToTarget = useCallback((item) => {
     if (item?.lat == null || item?.lon == null) return;
     requestMapFocus({ lat: item.lat, lon: item.lon, zoom: 10, force: true });
@@ -854,20 +975,16 @@ export default function EmcommLayout(props) {
   const clearEventLog = useCallback(() => {
     if (!window.confirm('Clear the entire EmComm event log? This cannot be undone.')) return;
     clearEvents();
-    // Clearing wiped the stored events but the diff snapshots above still
-    // remembered everything already on the board, so nothing re-logged until
-    // a brand-new station/alert appeared — the log looked dead until a page
-    // refresh (#1181). Reset the baselines to *empty* (not null) so the next
-    // effect pass treats the current picture as freshly heard, exactly like a
-    // reload does, without throwing away the map's RF history.
-    evtPrevRef.current = {
-      roster: new Set(),
-      alerts: new Set(),
-      shelters: new Set(),
-      stations: new Set(),
-      fieldReports: new Set(),
-    };
-    msgSinceRef.current = sessionStartRef.current;
+    // Two earlier behaviours were both wrong. Leaving the diff snapshots
+    // alone meant nothing could log again until a brand-new station appeared
+    // (#1181, "the log looks dead"). Resetting them to *empty* sets (the first
+    // fix) re-logged the whole current board the instant Clear was pressed,
+    // so the log looked like it never cleared (#1211). Null snapshots take the
+    // middle road: the next effect pass re-baselines on what is on the board
+    // now without reporting any of it, and only activity after this moment
+    // is recorded — which is what "clear it between operations" means.
+    evtPrevRef.current = { roster: null, alerts: null, shelters: null, stations: null, fieldReports: null };
+    msgSinceRef.current = Date.now();
     setLogEpoch((n) => n + 1);
   }, []);
 
@@ -946,9 +1063,10 @@ export default function EmcommLayout(props) {
           {loading && <span style={{ color: '#888', fontSize: '11px', marginLeft: '8px' }}>Loading...</span>}
         </div>
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
-          <span style={{ color: '#fff', fontWeight: 600 }}>
-            {utcTime}:{seconds}
-          </span>
+          {/* utcTime already carries seconds (HH:MM:SS); a second ticker used to
+              be appended, printing "00:13:47:47", and the date was missing (#1217) */}
+          <span style={{ color: '#888', marginRight: '8px', fontSize: '12px' }}>{utcDate}</span>
+          <span style={{ color: '#fff', fontWeight: 600 }}>{utcTime}</span>
           <span style={{ color: '#888', marginLeft: '6px', fontSize: '11px' }}>UTC</span>
         </div>
       </div>
@@ -990,6 +1108,8 @@ export default function EmcommLayout(props) {
             showAPRS={true}
             aprsStations={mapAprsStations}
             aprsWatchlistCalls={aprsData?.allWatchlistCalls}
+            showAPRSLabels={mapLayers?.showAPRSLabels ?? false}
+            aprsIconScale={mapLayers?.aprsIconScale ?? 1}
             hoveredSpot={hoveredSpot}
             hideOverlays={true}
             callsign={config.callsign}
@@ -1105,32 +1225,73 @@ export default function EmcommLayout(props) {
             {disasters.length === 0 ? (
               <EmptyState text="No recent disaster declarations" />
             ) : (
-              disasters.map((d) => (
-                <div
-                  key={d.id || d.disasterNumber}
-                  style={{
-                    padding: '4px 8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    fontSize: '11px',
-                    marginBottom: '2px',
-                  }}
-                >
-                  <span style={{ fontSize: '14px' }}>{incidentIcon(d.incidentType)}</span>
-                  <div>
-                    <div style={{ color: '#ddd' }}>{d.declarationTitle}</div>
-                    <div style={{ color: '#888', fontSize: '10px' }}>
-                      {d.incidentType} —{' '}
-                      {d.declarationType === 'DR'
-                        ? 'Major'
-                        : d.declarationType === 'EM'
-                          ? 'Emergency'
-                          : d.declarationType}
+              <>
+                {disasters.map((d) => {
+                  const kind =
+                    d.declarationType === 'DR'
+                      ? 'Major disaster'
+                      : d.declarationType === 'EM'
+                        ? 'Emergency'
+                        : d.declarationType === 'FM'
+                          ? 'Fire management'
+                          : d.declarationType;
+                  const areas = Array.isArray(d.areas) ? d.areas : [];
+                  const shownAreas = areas.slice(0, 4).join(', ');
+                  const moreAreas = areas.length > 4 ? ` +${areas.length - 4} more` : '';
+                  const day = (iso) => (iso ? String(iso).slice(0, 10) : '');
+                  return (
+                    <div
+                      key={d.id || d.disasterNumber}
+                      style={{
+                        padding: '4px 8px',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '8px',
+                        fontSize: '11px',
+                        marginBottom: '2px',
+                      }}
+                    >
+                      <span style={{ fontSize: '14px' }}>{incidentIcon(d.incidentType)}</span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ color: '#ddd' }}>
+                          {d.declarationTitle}
+                          {d.url && (
+                            <a
+                              href={d.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open this declaration on fema.gov"
+                              style={{ color: '#f59e0b', marginLeft: '6px', fontSize: '10px', textDecoration: 'none' }}
+                            >
+                              FEMA ↗
+                            </a>
+                          )}
+                        </div>
+                        <div style={{ color: '#888', fontSize: '10px' }}>
+                          {d.incidentType} — {kind}
+                          {d.disasterNumber ? ` · ${d.declarationType || 'DR'}-${d.disasterNumber}` : ''}
+                        </div>
+                        <div style={{ color: '#888', fontSize: '10px' }}>
+                          Declared {day(d.declarationDate)}
+                          {d.incidentBeginDate
+                            ? ` · Incident ${day(d.incidentBeginDate)}${d.incidentEndDate ? ` – ${day(d.incidentEndDate)}` : ' – ongoing'}`
+                            : ''}
+                        </div>
+                        {areas.length > 0 && (
+                          <div style={{ color: '#aaa', fontSize: '10px' }} title={areas.join(', ')}>
+                            {shownAreas}
+                            {moreAreas}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  );
+                })}
+                <div style={{ color: '#666', fontSize: '9px', padding: '2px 8px 4px' }}>
+                  Source: FEMA OpenFEMA disaster declarations{emcommData?.state ? ` for ${emcommData.state}` : ''}, last
+                  30 days, grouped per declaration.
                 </div>
-              ))
+              </>
             )}
           </PanelSection>
 
@@ -1174,6 +1335,11 @@ export default function EmcommLayout(props) {
                         <SourceBadge source={s.source} />
                       </span>
                       <span
+                        title={
+                          isAprs
+                            ? 'Status read from the words in the report (open / closed / full) — not a control'
+                            : 'Shelter status reported by FEMA'
+                        }
                         style={{
                           color: SHELTER_STATUS_COLORS[s.status] || '#888',
                           fontSize: '10px',
@@ -1251,6 +1417,47 @@ export default function EmcommLayout(props) {
                 >
                   Clear
                 </button>
+                {/* Callsign tags beside the APRS symbols on the map (#1209) */}
+                <button
+                  type="button"
+                  onClick={() => toggleAPRSLabels?.()}
+                  aria-pressed={!!mapLayers?.showAPRSLabels}
+                  title={mapLayers?.showAPRSLabels ? 'Hide APRS callsigns on map' : 'Show APRS callsigns on map'}
+                  style={{
+                    ...EMCOMM_APRS_SELECT,
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    ...(mapLayers?.showAPRSLabels ? { color: '#ffaa00', borderColor: '#ffaa00' } : {}),
+                  }}
+                >
+                  Aa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => cycleAprsIconScale?.()}
+                  title="APRS icon and tag size on the map — click to cycle"
+                  style={{
+                    ...EMCOMM_APRS_SELECT,
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    ...((mapLayers?.aprsIconScale ?? 1) !== 1 ? { color: '#22d3ee', borderColor: '#22d3ee' } : {}),
+                  }}
+                >
+                  {mapLayers?.aprsIconScale ?? 1}×
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleEmcommOnly}
+                  aria-pressed={emcommOnly}
+                  title="Map shows only EmComm-symbol stations and Net Roster members (roster members stay visible from their last known position)"
+                  style={{
+                    ...EMCOMM_APRS_SELECT,
+                    cursor: 'pointer',
+                    ...(emcommOnly ? { color: '#a855f7', borderColor: '#a855f7' } : {}),
+                  }}
+                >
+                  EmComm only
+                </button>
               </span>
             }
           >
@@ -1297,6 +1504,25 @@ export default function EmcommLayout(props) {
                           <span>{formatDistance(s.distance, config.allUnits?.dist || 'imperial')} </span>
                         )}
                         <span>{ageStr}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openHistory(s.ssid || s.call);
+                          }}
+                          title="Messages exchanged with this station, newest first"
+                          style={{
+                            background: 'none',
+                            border: '1px solid #333',
+                            borderRadius: '3px',
+                            color: '#888',
+                            fontSize: '9px',
+                            padding: '1px 4px',
+                            cursor: 'pointer',
+                            marginLeft: '6px',
+                          }}
+                        >
+                          HIST
+                        </button>
                       </div>
                     </div>
                     {hasTokens && (
@@ -1455,6 +1681,8 @@ export default function EmcommLayout(props) {
                   <div
                     key={op.call}
                     onClick={hasPos ? () => panToTarget(op) : undefined}
+                    onMouseEnter={() => scheduleHistoryHover(op.call)}
+                    onMouseLeave={cancelHistoryHover}
                     title={hasPos ? 'Show on map' : 'No APRS position heard for this station'}
                     style={{
                       padding: '5px 8px',
@@ -1491,6 +1719,24 @@ export default function EmcommLayout(props) {
                           }}
                         >
                           MSG
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openHistory(op.call);
+                          }}
+                          title="Messages exchanged with this station, newest first"
+                          style={{
+                            background: 'none',
+                            border: '1px solid #333',
+                            borderRadius: '3px',
+                            color: historyTarget === op.call ? '#22d3ee' : '#888',
+                            fontSize: '9px',
+                            padding: '1px 4px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          HIST
                         </button>
                       </div>
                     </div>
@@ -1586,6 +1832,91 @@ export default function EmcommLayout(props) {
           </PanelSection>
 
           {/* Message Compose */}
+          {historyTarget && (
+            <div
+              style={{
+                background: '#111620',
+                border: '1px solid #2a3040',
+                borderRadius: '6px',
+                padding: '10px',
+                marginTop: '8px',
+              }}
+            >
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}
+              >
+                <span style={{ color: '#22d3ee', fontWeight: 600, fontSize: '12px' }}>
+                  Messages with {historyTarget}
+                  {!historyLoading && (
+                    <span style={{ color: '#888', fontWeight: 400, marginLeft: '6px', fontSize: '10px' }}>
+                      {historyMsgs.length} · newest first
+                    </span>
+                  )}
+                </span>
+                <span style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    onClick={() => setMessageTarget(historyTarget)}
+                    title="Reply to this station"
+                    style={{
+                      background: 'none',
+                      border: '1px solid #333',
+                      borderRadius: '3px',
+                      color: '#888',
+                      fontSize: '9px',
+                      padding: '1px 4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    MSG
+                  </button>
+                  <button
+                    onClick={() => setHistoryTarget(null)}
+                    style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px' }}
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+              {historyLoading ? (
+                <div style={{ color: '#888', fontSize: '10px' }}>Loading…</div>
+              ) : historyMsgs.length === 0 ? (
+                <div style={{ color: '#888', fontSize: '10px' }}>
+                  No messages with this station since the server started.
+                </div>
+              ) : (
+                <div
+                  style={{ maxHeight: '220px', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}
+                >
+                  {historyMsgs.map((m, i) => {
+                    const sent = m.direction === 'sent';
+                    const when = m.timestamp ? new Date(m.timestamp).toISOString().slice(5, 16).replace('T', ' ') : '';
+                    return (
+                      <div
+                        key={`${m.timestamp}-${i}`}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '64px 14px 1fr',
+                          gap: '6px',
+                          fontSize: '10px',
+                          alignItems: 'baseline',
+                          borderLeft: `2px solid ${sent ? '#22d3ee' : '#22c55e'}`,
+                          paddingLeft: '6px',
+                        }}
+                        title={`${sent ? 'Sent to' : 'Received from'} ${sent ? m.to : m.from}${m.msgId ? ` · id ${m.msgId}` : ''}`}
+                      >
+                        <span style={{ color: '#888', fontFamily: 'var(--font-mono)' }}>{when}Z</span>
+                        <span style={{ color: sent ? '#22d3ee' : '#22c55e' }}>{sent ? '→' : '←'}</span>
+                        <span style={{ color: '#ddd', wordBreak: 'break-word' }}>
+                          <span style={{ color: '#aaa', marginRight: '4px' }}>{sent ? m.to : m.from}</span>
+                          {m.text}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           {messageTarget && (
             <div
               style={{

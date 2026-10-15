@@ -37,7 +37,23 @@ function classifyFletcherRelays(s, nowMs) {
   // single blip: during a mixed-version deploy window we'd rather
   // under-page than reintroduce the two-pings-per-blip noise, and
   // satellite data serves stale through relay trouble regardless.
-  const fails = typeof s.consecutiveUpstreamFails === 'number' ? s.consecutiveUpstreamFails : 1;
+  let fails = typeof s.consecutiveUpstreamFails === 'number' ? s.consecutiveUpstreamFails : 1;
+  // Newer fletcher builds count per upstream. SatNOGS only serves radio
+  // metadata (the daily transmitter walk), and it throttles bursts; that
+  // never puts satellite tracking at risk, so it must not page. Judge
+  // degraded on the orbital-data upstreams (CelesTrak, AMSAT) only.
+  const byUpstream = s.consecutiveFailsByUpstream;
+  if (byUpstream && typeof byUpstream === 'object') {
+    const orbital = Object.entries(byUpstream).filter(([name]) => name !== 'satnogs');
+    fails = orbital.reduce((m, [, n]) => Math.max(m, Number(n) || 0), 0);
+    const satnogs = Number(byUpstream.satnogs) || 0;
+    if (fails < CONSECUTIVE_FAILS_THRESHOLD && satnogs >= CONSECUTIVE_FAILS_THRESHOLD) {
+      return {
+        status: 'ok',
+        detail: `ok (SatNOGS throttling the metadata walk, ${satnogs} consecutive — tracking unaffected)`,
+      };
+    }
+  }
   if (fails >= CONSECUTIVE_FAILS_THRESHOLD) {
     return {
       status: 'degraded',

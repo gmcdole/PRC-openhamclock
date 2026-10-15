@@ -179,20 +179,42 @@ module.exports = function (app, ctx) {
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       const filter = `state eq '${st}' and declarationDate ge '${since}'`;
 
+      // OpenFEMA returns one row per designated area (county), so a single
+      // declaration arrives as a dozen identical-looking rows (#1218). Group
+      // by disaster number, keep the designated areas and incident dates, and
+      // link to FEMA's disaster page. $top is per row, so it must cover every
+      // county of every recent declaration.
       const response = await fetch(
-        `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate desc&$top=50`,
+        `https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?$filter=${encodeURIComponent(filter)}&$orderby=declarationDate desc&$top=500`,
       );
       const json = await response.json();
 
-      const disasters = (json.DisasterDeclarationsSummaries || []).map((d) => ({
-        id: d.id,
-        disasterNumber: d.disasterNumber,
-        state: d.state,
-        declarationType: d.declarationType,
-        declarationTitle: d.declarationTitle,
-        declarationDate: d.declarationDate,
-        incidentType: d.incidentType,
-      }));
+      const byNumber = new Map();
+      for (const d of json.DisasterDeclarationsSummaries || []) {
+        const key = d.disasterNumber ?? d.id;
+        let g = byNumber.get(key);
+        if (!g) {
+          g = {
+            id: `fema-${key}`,
+            disasterNumber: d.disasterNumber ?? null,
+            state: d.state,
+            declarationType: d.declarationType,
+            declarationTitle: d.declarationTitle,
+            declarationDate: d.declarationDate,
+            incidentType: d.incidentType,
+            incidentBeginDate: d.incidentBeginDate || null,
+            incidentEndDate: d.incidentEndDate || null,
+            areas: [],
+            url: d.disasterNumber ? `https://www.fema.gov/disaster/${d.disasterNumber}` : null,
+            source: 'FEMA OpenFEMA',
+          };
+          byNumber.set(key, g);
+        }
+        // Earliest declaration date is the original declaration; later rows are amendments.
+        if (d.declarationDate && d.declarationDate < g.declarationDate) g.declarationDate = d.declarationDate;
+        if (d.designatedArea && !g.areas.includes(d.designatedArea)) g.areas.push(d.designatedArea);
+      }
+      const disasters = [...byNumber.values()].sort((a, b) => (a.declarationDate < b.declarationDate ? 1 : -1));
 
       logDebug(`[EmComm] FEMA disasters: ${disasters.length} for ${st}`);
       disastersCache[st] = { data: disasters, timestamp: Date.now() };

@@ -190,6 +190,8 @@ export const DockableApp = ({
   togglePSKPaths,
   toggleWSJTX,
   toggleAPRS,
+  toggleAPRSLabels,
+  cycleAprsIconScale,
   toggleMeshCom,
   toggleRotatorBearing,
   hoveredSpot,
@@ -353,6 +355,8 @@ export const DockableApp = ({
   const toggleWSJTXEff = useInternalMapLayers ? internalMap.toggleWSJTX : toggleWSJTX;
   const toggleRotatorBearingEff = useInternalMapLayers ? internalMap.toggleRotatorBearing : toggleRotatorBearing;
   const toggleAPRSEff = useInternalMapLayers ? internalMap.toggleAPRS : toggleAPRS;
+  const toggleAPRSLabelsEff = useInternalMapLayers ? internalMap.toggleAPRSLabels : toggleAPRSLabels;
+  const cycleAprsIconScaleEff = useInternalMapLayers ? internalMap.cycleAprsIconScale : cycleAprsIconScale;
   const toggleMeshComEff = useInternalMapLayers ? internalMap.toggleMeshCom : toggleMeshCom;
 
   // Per-panel zoom levels (persisted)
@@ -394,20 +398,11 @@ export const DockableApp = ({
     (spot) => {
       if (!spot) return;
 
-      // 1. Tune Rig if frequency is available and rig control is enabled
+      // 1. Tune Rig if frequency is available and rig control is enabled.
+      // tuneTo picks dialFrequency (WSJT-X) over freq/freqMHz and remembers
+      // the spot's call for the Logbook's +QSO.
       if (enabled && (spot.freq || spot.freqMHz || spot.dialFrequency)) {
-        let freqToSend;
-
-        // WSJT-X decodes have dialFrequency (the VFO frequency to tune to)
-        // The freq field is just the audio delta offset within the passband
-        if (spot.dialFrequency) {
-          freqToSend = spot.dialFrequency; // Use dial frequency directly
-        } else {
-          // For other spot types (DX Cluster, POTA, etc.), use freq or freqMHz as-is
-          freqToSend = spot.freq || spot.freqMHz;
-        }
-
-        tuneTo(freqToSend, spot.mode);
+        tuneTo(spot);
       }
 
       // 2. Set DX Location if location data is available
@@ -851,6 +846,8 @@ export const DockableApp = ({
         showAPRS={mapLayersEff.showAPRS}
         aprsStations={aprsData?.filteredStations}
         aprsWatchlistCalls={aprsData?.allWatchlistCalls}
+        showAPRSLabels={mapLayersEff.showAPRSLabels}
+        aprsIconScale={mapLayersEff.aprsIconScale ?? 1}
         showMeshCom={mapLayersEff.showMeshCom}
         meshcomNodes={meshcomData?.nodes}
         // ✅ Rotator bearing overlay support
@@ -1185,6 +1182,10 @@ export const DockableApp = ({
               aprsData={aprsData}
               showOnMap={mapLayersEff.showAPRS}
               onToggleMap={toggleAPRSEff}
+              showLabelsOnMap={mapLayersEff.showAPRSLabels}
+              onToggleLabelsOnMap={toggleAPRSLabelsEff}
+              iconScale={mapLayersEff.aprsIconScale ?? 1}
+              onCycleIconScale={cycleAprsIconScaleEff}
               onHoverSpot={setHoveredSpot}
               onSpotClick={handleSpotClick}
               deLocation={config.location}

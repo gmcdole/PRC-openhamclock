@@ -63,6 +63,10 @@ const stats = {
   lastUpstreamErrorAt: null,
   lastUpstreamStatus: null,
   consecutiveUpstreamFails: 0,
+  // Per-upstream counters so the health probe can tell "CelesTrak is
+  // blocking us" (satellite data at risk) from "SatNOGS is throttling the
+  // daily metadata walk" (cosmetic).
+  consecutiveFailsByUpstream: {},
 };
 
 const log = (level, msg) => {
@@ -114,9 +118,11 @@ async function relay(upstreamName, targetUrl, req, res) {
     if (result.status === 403 || result.status === 429 || result.status >= 500) {
       stats.lastUpstreamErrorAt = now();
       stats.consecutiveUpstreamFails++;
+      stats.consecutiveFailsByUpstream[upstreamName] = (stats.consecutiveFailsByUpstream[upstreamName] || 0) + 1;
     } else {
       stats.lastUpstreamOkAt = now();
       stats.consecutiveUpstreamFails = 0;
+      stats.consecutiveFailsByUpstream[upstreamName] = 0;
     }
 
     if (result.status >= 200 && result.status < 300) {
@@ -134,6 +140,7 @@ async function relay(upstreamName, targetUrl, req, res) {
     stats.lastUpstreamErrorAt = now();
     stats.lastUpstreamStatus = 0;
     stats.consecutiveUpstreamFails++;
+    stats.consecutiveFailsByUpstream[upstreamName] = (stats.consecutiveFailsByUpstream[upstreamName] || 0) + 1;
     log('WARN', `${upstreamName} fetch failed (${targetUrl}): ${err.message}`);
 
     if (cached) {

@@ -3,14 +3,35 @@
  * Displays real-time APRS station positions with watchlist group management.
  * Supports tagging callsigns into named groups for EmComm and public service tracking.
  */
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import CallsignLink from './CallsignLink.jsx';
 import { useCallsignPopup } from './CallsignPopupManager.jsx';
 import { calculateDistance, formatDistance } from '../utils/geo.js';
 import { stationAgeMinutes, formatStationAge } from '../utils/aprsStationAge.js';
+import {
+  sortAprsStations,
+  nextAprsSort,
+  readStoredAprsSort,
+  storeAprsSort,
+  APRS_SORT_KEYS,
+} from '../utils/aprsSort.js';
+import { APRS_SELECT_EVENT, APRS_SELECT_HIGHLIGHT_MS } from '../utils/aprsSelect.js';
+import { formatAprsDevice } from '../utils/aprsDevice.js';
 
-const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick, deLocation, units = 'metric' }) => {
+const APRSPanel = ({
+  aprsData,
+  showOnMap,
+  onToggleMap,
+  showLabelsOnMap = false,
+  onToggleLabelsOnMap,
+  iconScale = 1,
+  onCycleIconScale,
+  onHoverSpot,
+  onSpotClick,
+  deLocation,
+  units = 'metric',
+}) => {
   const {
     filteredStations = [],
     stations = [],
@@ -43,15 +64,53 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
   const [addCallInput, setAddCallInput] = useState('');
   const [addCallTarget, setAddCallTarget] = useState('');
   const [tooltip, setTooltip] = useState(null); // { station, distKm, x, y }
+  const [sort, setSort] = useState(() => readStoredAprsSort()); // { key, dir } | null (#1208)
+  const [selectedKey, setSelectedKey] = useState(null); // row highlighted from a map click (#1210)
+  const listRef = useRef(null);
 
-  // Search filter
+  // Search filter, then the chosen sort (arrival order when none is active)
   const displayStations = useMemo(() => {
-    if (!search.trim()) return filteredStations;
-    const q = search.toUpperCase();
-    return filteredStations.filter(
-      (s) => s.call?.includes(q) || s.ssid?.includes(q) || s.comment?.toUpperCase().includes(q),
-    );
-  }, [filteredStations, search]);
+    let list = filteredStations;
+    if (search.trim()) {
+      const q = search.toUpperCase();
+      list = filteredStations.filter(
+        (s) => s.call?.includes(q) || s.ssid?.includes(q) || s.comment?.toUpperCase().includes(q),
+      );
+    }
+    return sortAprsStations(list, sort, deLocation);
+  }, [filteredStations, search, sort, deLocation]);
+
+  const handleSortClick = useCallback((key) => {
+    setSort((prev) => {
+      const next = nextAprsSort(prev, key);
+      storeAprsSort(next);
+      return next;
+    });
+  }, []);
+
+  // Map marker click → bring that station's row into view. A station hidden
+  // only by the search box gets the search cleared; the group/source filters
+  // are the user's explicit choice and are left alone.
+  useEffect(() => {
+    const onSelect = (e) => {
+      const key = e?.detail?.key;
+      if (!key) return;
+      const station = filteredStations.find((s) => (s.ssid || s.call) === key || s.call === key);
+      if (!station) return;
+      setSearch('');
+      setSelectedKey(station.ssid || station.call);
+    };
+    window.addEventListener(APRS_SELECT_EVENT, onSelect);
+    return () => window.removeEventListener(APRS_SELECT_EVENT, onSelect);
+  }, [filteredStations]);
+
+  useEffect(() => {
+    if (!selectedKey) return undefined;
+    const safe = String(selectedKey).replace(/["\\]/g, '');
+    listRef.current?.querySelector(`[data-aprs-row="${safe}"]`)?.scrollIntoView?.({ block: 'nearest' });
+    const timer = setTimeout(() => setSelectedKey(null), APRS_SELECT_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [selectedKey, displayStations]);
 
   const groupNames = Object.keys(watchlist.groups);
 
@@ -177,6 +236,48 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
           >
             {showOnMap ? t('aprsPanel.mapOn') : t('aprsPanel.mapOff')}
           </button>
+          {typeof onToggleLabelsOnMap === 'function' && (
+            <button
+              onClick={onToggleLabelsOnMap}
+              title={showLabelsOnMap ? t('aprsPanel.labelsOn') : t('aprsPanel.labelsOff')}
+              aria-label={showLabelsOnMap ? t('aprsPanel.labelsOn') : t('aprsPanel.labelsOff')}
+              aria-pressed={showLabelsOnMap}
+              style={{
+                background: showLabelsOnMap ? 'rgba(255, 170, 0, 0.22)' : 'var(--bg-tertiary)',
+                border: `1px solid ${showLabelsOnMap ? '#ffaa00' : 'var(--border-color)'}`,
+                borderRadius: '4px',
+                padding: '3px 6px',
+                fontSize: '11px',
+                fontWeight: '700',
+                color: showLabelsOnMap ? '#ffaa00' : 'var(--text-muted)',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              {t('aprsPanel.labelsButton')}
+            </button>
+          )}
+          {typeof onCycleIconScale === 'function' && (
+            <button
+              onClick={onCycleIconScale}
+              title={t('aprsPanel.iconSizeTitle')}
+              aria-label={t('aprsPanel.iconSizeTitle')}
+              style={{
+                background: iconScale !== 1 ? 'rgba(34, 211, 238, 0.18)' : 'var(--bg-tertiary)',
+                border: `1px solid ${iconScale !== 1 ? 'var(--accent-cyan)' : 'var(--border-color)'}`,
+                borderRadius: '4px',
+                padding: '3px 6px',
+                fontSize: '11px',
+                fontWeight: '700',
+                color: iconScale !== 1 ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                minWidth: '38px',
+              }}
+            >
+              {iconScale}×
+            </button>
+          )}
         </div>
       </div>
 
@@ -529,8 +630,49 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
         />
       </div>
 
+      {/* Sort header (#1208) */}
+      <div
+        role="group"
+        aria-label={t('aprsPanel.sort.label')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          padding: '3px 8px',
+          borderBottom: '1px solid var(--border-color)',
+          fontSize: '10px',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <span>{t('aprsPanel.sort.label')}</span>
+        {APRS_SORT_KEYS.map((key) => {
+          const active = sort?.key === key;
+          return (
+            <button
+              key={key}
+              onClick={() => handleSortClick(key)}
+              title={t('aprsPanel.sort.title')}
+              aria-pressed={active}
+              style={{
+                background: active ? 'var(--bg-tertiary)' : 'transparent',
+                border: `1px solid ${active ? 'var(--accent-cyan)' : 'var(--border-color)'}`,
+                borderRadius: '3px',
+                padding: '1px 6px',
+                fontSize: '10px',
+                color: active ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              {t(`aprsPanel.sort.${key}`)}
+              {active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Station list */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '4px' }}>
+      <div ref={listRef} style={{ flex: 1, overflow: 'auto', padding: '4px' }}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>
             {t('aprsPanel.loading')}
@@ -547,9 +689,13 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
                 ? calculateDistance(deLocation.lat, deLocation.lon, station.lat, station.lon)
                 : null;
 
+            const rowKey = station.ssid || station.call;
+            const isSelected = selectedKey != null && rowKey === selectedKey;
+
             return (
               <div
                 key={`${station.ssid}-${i}`}
+                data-aprs-row={rowKey}
                 onMouseEnter={(e) => {
                   onHoverSpot?.({ call: station.call, lat: station.lat, lon: station.lon });
                   setTooltip({ station, distKm, x: e.clientX, y: e.clientY });
@@ -573,7 +719,12 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
                   padding: '5px 6px',
                   borderRadius: '3px',
                   marginBottom: '2px',
-                  background: i % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'transparent',
+                  background: isSelected
+                    ? 'rgba(34,211,238,0.18)'
+                    : i % 2 === 0
+                      ? 'rgba(255,255,255,0.03)'
+                      : 'transparent',
+                  outline: isSelected ? '1px solid var(--accent-cyan)' : 'none',
                   cursor: 'pointer',
                   transition: 'background 0.15s',
                   borderLeft: isWatched ? '2px solid var(--accent-amber)' : '2px solid transparent',
@@ -609,7 +760,7 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
                       </span>
                     )}
                   </div>
-                  {station.comment && (
+                  {(station.device || station.comment) && (
                     <div
                       style={{
                         color: 'var(--text-muted)',
@@ -620,6 +771,12 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
                         maxWidth: '180px',
                       }}
                     >
+                      {station.device && (
+                        <span style={{ color: 'var(--text-secondary)' }} title={t('aprsPanel.deviceTitle')}>
+                          {formatAprsDevice(station.device)}
+                          {station.comment ? ' · ' : ''}
+                        </span>
+                      )}
                       {station.comment}
                     </div>
                   )}
@@ -710,6 +867,11 @@ const APRSPanel = ({ aprsData, showOnMap, onToggleMap, onHoverSpot, onSpotClick,
                   </span>
                 )}
                 {s.altitude != null && <span>Altitude: {s.altitude} ft</span>}
+                {s.device && (
+                  <span>
+                    {t('aprsPanel.deviceTitle')}: {formatAprsDevice(s.device)}
+                  </span>
+                )}
                 {s.symbol && <span>Symbol: {s.symbol}</span>}
               </div>
             </div>

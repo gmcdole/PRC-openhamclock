@@ -16,6 +16,7 @@ import {
   gridToRect,
   workedGridCounts,
   workedGridsBucket,
+  paintAprs,
   GLOBE_OVERLAY_PAINTERS,
   GLOBE_OVERLAY_LAYER_IDS,
   ZONE_SOURCES,
@@ -38,6 +39,7 @@ function mockCtx() {
     'fillRect',
     'clearRect',
     'fillText',
+    'strokeText',
     'arc',
     'closePath',
     'translate',
@@ -400,6 +402,36 @@ describe('paintWorkedGrids', () => {
   });
 });
 
+describe('paintAprs', () => {
+  const W = 2048;
+  const H = 1024;
+  const stations = [
+    { call: 'KE8PLM', ssid: 'KE8PLM-9', lat: 41.5, lon: -81.7, source: 'local-tnc' },
+    { call: 'W0ABC', ssid: 'W0ABC-7', lat: 40.1, lon: -105.1 },
+    { call: 'N0XYZ', ssid: 'N0XYZ', lat: 'bad', lon: null }, // no position → skipped
+  ];
+
+  it('draws one dot per positioned station, coloured by watchlist / RF / internet', () => {
+    const ctx = mockCtx();
+    paintAprs(ctx, { width: W, height: H, opacity: 1, data: { stations, watch: new Set(['W0ABC']), labels: false } });
+    expect(ctx.calls.filter((c) => c[0] === 'arc')).toHaveLength(2);
+    const fills = ctx.calls.filter((c) => c[0] === 'set:fillStyle').map((c) => c[1]);
+    expect(fills).toContain('rgba(74,222,128,1)'); // RF green
+    expect(fills).toContain('rgba(245,158,11,1)'); // watched amber
+    expect(ctx.calls.filter((c) => c[0] === 'fillText')).toHaveLength(0);
+  });
+
+  it('adds a callsign tag per dot when labels are on, and draws nothing for empty data', () => {
+    const ctx = mockCtx();
+    paintAprs(ctx, { width: W, height: H, opacity: 1, data: { stations, watch: null, labels: true } });
+    expect(ctx.calls.filter((c) => c[0] === 'fillText').map((c) => c[1])).toEqual(['KE8PLM-9', 'W0ABC-7']);
+    const empty = mockCtx();
+    paintAprs(empty, { width: W, height: H, opacity: 1, data: { stations: [] } });
+    paintAprs(empty, { width: W, height: H, opacity: 1, data: null });
+    expect(empty.calls).toHaveLength(0);
+  });
+});
+
 describe('painter registry', () => {
   it('registers every globe-capable layer under its plugin id, rasters first', () => {
     expect(GLOBE_OVERLAY_LAYER_IDS).toEqual([
@@ -416,14 +448,18 @@ describe('painter registry', () => {
       'floods',
       'history-playback',
       'lightning',
-      // aircraft has no painter — Globe3D renders it as instanced 3D models —
-      // but the id must stay in the list for state plumbing + suppression note
+      'aprs',
+      // aircraft and logbook-qsos have no painter — Globe3D renders them
+      // natively — but the ids must stay in the list for state plumbing +
+      // suppression note
       'aircraft',
+      'logbook-qsos',
     ]);
     for (const id of Object.keys(GLOBE_OVERLAY_PAINTERS)) {
       expect(typeof GLOBE_OVERLAY_PAINTERS[id]).toBe('function');
     }
     expect(GLOBE_OVERLAY_PAINTERS.aircraft).toBeUndefined();
+    expect(GLOBE_OVERLAY_PAINTERS['logbook-qsos']).toBeUndefined();
   });
 
   it('registered painters are the exported ones', () => {
@@ -453,6 +489,7 @@ describe('new painters (globe parity batch)', () => {
       paintWxRadar,
       paintLightning,
       paintEarthquakes,
+      paintAprs,
       paintWildfires,
       paintFloods,
       paintTornadoWarnings,

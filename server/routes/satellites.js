@@ -90,7 +90,17 @@ module.exports = function (app, ctx) {
   const SATNOGS_TRANSMITTER_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
   const SATNOGS_TRANSMITTER_MAX_RECORDS = 500;
   const SATNOGS_TRANSMITTER_REQUEST_TIMEOUT = 8000;
-  const SATNOGS_TRANSMITTER_CONCURRENCY = 4;
+  // One request at a time with a breather between them: four-wide bursts got
+  // SatNOGS throttling us every day, ~40 relay timeouts in two minutes,
+  // which paged watchtower as "fletcher degraded" for ten minutes. The data
+  // changes rarely, so slow is fine. After a few consecutive failures the
+  // walk stops and yesterday's metadata stays in place.
+  const SATNOGS_TRANSMITTER_CONCURRENCY = 1;
+  const SATNOGS_TRANSMITTER_PAUSE_MS = 250;
+  const SATNOGS_TRANSMITTER_MAX_CONSECUTIVE_FAILURES = 3;
+  // 24 h plus up to 2 h of jitter, so the refresh does not land at the same
+  // minute of boot every day.
+  const satnogsRefreshDelay = () => SATNOGS_TRANSMITTER_CACHE_DURATION + Math.floor(Math.random() * 2 * 60 * 60 * 1000);
   const SATNOGS_TRANSMITTER_ATTRIBUTION = 'Radio metadata from SatNOGS Transmitter DB (CC BY-SA 4.0)';
 
   let satnogsTransmitterCache = {
@@ -367,7 +377,7 @@ module.exports = function (app, ctx) {
       }
     }
 
-    return [];
+    return null; // every base failed (timeout / throttled) — distinct from "no transmitters"
   };
 
   const applySatnogsMetadataToRegistry = (recordsByNorad) => {
@@ -436,6 +446,8 @@ module.exports = function (app, ctx) {
       const recordsByNorad = {};
       let totalRecords = 0;
 
+      let consecutiveFailures = 0;
+      let aborted = false;
       for (
         let i = 0;
         i < norads.length && totalRecords < SATNOGS_TRANSMITTER_MAX_RECORDS;
@@ -450,14 +462,35 @@ module.exports = function (app, ctx) {
         );
 
         for (const { norad, transmitters } of results) {
-          const transmitterList = Array.isArray(transmitters) ? transmitters : [];
+          if (transmitters === null) {
+            consecutiveFailures++;
+            continue;
+          }
+          consecutiveFailures = 0;
           const room = SATNOGS_TRANSMITTER_MAX_RECORDS - totalRecords;
           if (room <= 0) break;
 
-          const limitedTransmitters = transmitterList.slice(0, room);
+          const limitedTransmitters = transmitters.slice(0, room);
           recordsByNorad[norad] = limitedTransmitters;
           totalRecords += limitedTransmitters.length;
         }
+
+        if (consecutiveFailures >= SATNOGS_TRANSMITTER_MAX_CONSECUTIVE_FAILURES) {
+          aborted = true;
+          break;
+        }
+        if (i + SATNOGS_TRANSMITTER_CONCURRENCY < norads.length) {
+          await new Promise((resolve) => setTimeout(resolve, SATNOGS_TRANSMITTER_PAUSE_MS));
+        }
+      }
+
+      if (aborted) {
+        // SatNOGS is throttling or down — keep whatever metadata we already
+        // had rather than overwrite it with a partial walk. Try again later.
+        const msg = `SatNOGS not answering after ${Object.keys(recordsByNorad).length} satellites — keeping previous metadata`;
+        satnogsTransmitterCache = { ...satnogsTransmitterCache, lastError: msg };
+        logWarn(`[Satellites] ${msg}`);
+        return;
       }
 
       satnogsTransmitterCache = {
@@ -1199,9 +1232,12 @@ module.exports = function (app, ctx) {
   // independent of the TLE/OMM state machine because transmitter metadata
   // changes much less frequently than orbital data.
   refreshSatnogsTransmitterMetadata(false);
-  setInterval(() => {
-    refreshSatnogsTransmitterMetadata(false);
-  }, SATNOGS_TRANSMITTER_CACHE_DURATION);
+  const scheduleSatnogsRefresh = () =>
+    setTimeout(() => {
+      refreshSatnogsTransmitterMetadata(false);
+      scheduleSatnogsRefresh();
+    }, satnogsRefreshDelay());
+  scheduleSatnogsRefresh();
 
   // satellites with a CelesTrak datasource that need data
   const celestrakSatsToDownload = (now) => {

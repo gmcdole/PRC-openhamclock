@@ -20,6 +20,8 @@
  *   beaconInterval: number Beacon interval in seconds (default: 600, 0 = disabled)
  *   symbol:       string   APRS symbol (default: '/-' = house)
  *   verbose:      boolean  Log all packets (default: false)
+ *   serverForward: boolean POST received frames to the OpenHamClock server (default: true)
+ *   ohcUrl:       string   OpenHamClock server URL for that (default: 'http://localhost:3000')
  *
  * Supported TNC interfaces:
  *   - Direwolf (KISS over TCP, default port 8001)
@@ -111,13 +113,24 @@ const descriptor = {
     const cfg = config.aprs || {};
     const bus = services?.pluginBus;
     const protocol = cfg.protocol || 'kiss-tcp';
-    const callsign = (cfg.callsign || 'N0CALL').toUpperCase();
-    const ssid = cfg.ssid || 0;
-    const myCall = ssid > 0 ? `${callsign}-${ssid}` : callsign;
-    const dest = cfg.destination || 'APOHC1';
-    const digiPath = cfg.path || ['WIDE1-1', 'WIDE2-1'];
-    const symbol = cfg.symbol || '/-';
     const beaconIntervalSec = cfg.beaconInterval != null ? cfg.beaconInterval : 600;
+
+    // Station identity is read from the live config on every frame, not
+    // captured once at start-up: the settings page saves without restarting
+    // the plugin, and a captured value meant a changed SSID kept going out
+    // under the old one until rig-bridge was restarted (#1213). Protocol,
+    // host/port and the beacon timer are connection-level and still need a
+    // restart.
+    const live = () => config.aprs || cfg;
+    const stationCall = () => (live().callsign || 'N0CALL').toUpperCase();
+    const stationSsid = () => {
+      const n = parseInt(live().ssid, 10);
+      return Number.isFinite(n) && n > 0 && n <= 15 ? n : 0;
+    };
+    const myCallNow = () => (stationSsid() > 0 ? `${stationCall()}-${stationSsid()}` : stationCall());
+    const destNow = () => live().destination || 'APOHC1';
+    const pathNow = () => live().path || ['WIDE1-1', 'WIDE2-1'];
+    const symbolNow = () => live().symbol || '/-';
 
     let connection = null; // TCP socket or serial port
     let kissBuffer = Buffer.alloc(0);
@@ -128,6 +141,52 @@ const descriptor = {
     let packetsTx = 0;
     let lastBeaconTime = null;
     const packetListeners = new Set();
+
+    // Server forwarding (#1221): every received frame is also POSTed to the
+    // OpenHamClock server's /api/aprs/local, batched once a second, so the
+    // server's station cache — and every browser that reads it — sees RF
+    // stations whether or not a browser is connected to this stream. Read
+    // from the live config so the settings page applies without a restart.
+    const forwardQueue = [];
+    let forwardTimer = null;
+    const forwardEnabled = () => live().serverForward !== false;
+    const forwardUrl = () => {
+      const base = String(live().ohcUrl || 'http://localhost:3000').replace(/\/$/, '');
+      try {
+        return new URL(`${base}/api/aprs/local`);
+      } catch (e) {
+        return null;
+      }
+    };
+    function flushForwardQueue() {
+      forwardTimer = null;
+      const packets = forwardQueue.splice(0, 200);
+      if (!packets.length) return;
+      const target = forwardUrl();
+      if (!target) return;
+      const body = JSON.stringify({ packets });
+      const mod = target.protocol === 'https:' ? https : http;
+      const req = mod.request(
+        {
+          hostname: target.hostname,
+          port: target.port || (target.protocol === 'https:' ? 443 : 80),
+          path: target.pathname,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        },
+        (res) => res.resume(),
+      );
+      req.on('error', () => {}); // fire-and-forget — a down server never stalls the receive loop
+      req.setTimeout(3000, () => req.destroy());
+      req.write(body);
+      req.end();
+    }
+    function enqueueForward(packet) {
+      if (!forwardEnabled()) return;
+      forwardQueue.push(packet);
+      if (forwardQueue.length > 1000) forwardQueue.splice(0, forwardQueue.length - 1000);
+      if (!forwardTimer) forwardTimer = setTimeout(flushForwardQueue, 1000);
+    }
 
     function addPacketListener(fn) {
       packetListeners.add(fn);
@@ -141,36 +200,6 @@ const descriptor = {
           fn(packet);
         } catch (e) {}
       }
-    }
-
-    // Forward a batch of packets to the local OHC server's /api/aprs/local.
-    // Fire-and-forget — errors are silently ignored so a down OHC server
-    // never stalls the TNC receive loop.
-    function forwardToLocal(packets) {
-      if (cfg.localForward === false) return;
-      const ohcUrl = (cfg.ohcUrl || 'http://localhost:8080').replace(/\/$/, '');
-      let parsed;
-      try {
-        parsed = new URL(`${ohcUrl}/api/aprs/local`);
-      } catch (e) {
-        return;
-      }
-      const body = JSON.stringify({ packets });
-      const mod = parsed.protocol === 'https:' ? https : http;
-      const req = mod.request(
-        {
-          hostname: parsed.hostname,
-          port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-          path: parsed.pathname,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-        },
-        () => {},
-      );
-      req.on('error', () => {}); // swallow errors
-      req.setTimeout(3000, () => req.destroy());
-      req.write(body);
-      req.end();
     }
 
     // Format latitude for APRS: DDMM.MMN
@@ -237,13 +266,15 @@ const descriptor = {
         }
 
         // Notify SSE listeners
-        notifyListeners({
+        const rawFrame = {
           source: packet.source,
           destination: packet.destination,
           digipeaters: packet.digipeaters,
           info: packet.info,
           timestamp: Date.now(),
-        });
+        };
+        notifyListeners(rawFrame);
+        enqueueForward(rawFrame);
       }
     }
 
@@ -261,14 +292,15 @@ const descriptor = {
     }
 
     function sendBeacon(lat, lon, comment) {
+      const symbol = symbolNow();
       const symbolTable = symbol.charAt(0);
       const symbolCode = symbol.charAt(1);
       const info = `!${formatAprsLat(lat)}${symbolTable}${formatAprsLon(lon)}${symbolCode}${comment || ''}`;
-      const frame = buildAx25Frame(myCall, dest, digiPath, info);
+      const frame = buildAx25Frame(myCallNow(), destNow(), pathNow(), info);
       const ok = sendRaw(frame);
       if (ok) {
         lastBeaconTime = Date.now();
-        console.log(`[APRS-TNC] TX beacon: ${myCall} @ ${lat.toFixed(4)},${lon.toFixed(4)}`);
+        console.log(`[APRS-TNC] TX beacon: ${myCallNow()} @ ${lat.toFixed(4)},${lon.toFixed(4)}`);
       }
       return ok;
     }
@@ -277,7 +309,7 @@ const descriptor = {
       const padTo = to.padEnd(9, ' ');
       const idSuffix = msgId ? `{${msgId}` : '';
       const info = `:${padTo}:${message}${idSuffix}`;
-      const frame = buildAx25Frame(myCall, dest, digiPath, info);
+      const frame = buildAx25Frame(myCallNow(), destNow(), pathNow(), info);
       const ok = sendRaw(frame);
       if (ok) {
         console.log(`[APRS-TNC] TX msg to ${to}: ${message}`);
@@ -288,7 +320,7 @@ const descriptor = {
     function sendAck(to, msgId) {
       const padTo = to.padEnd(9, ' ');
       const info = `:${padTo}:ack${msgId}`;
-      const frame = buildAx25Frame(myCall, dest, digiPath, info);
+      const frame = buildAx25Frame(myCallNow(), destNow(), pathNow(), info);
       const ok = sendRaw(frame);
       if (ok) {
         console.log(`[APRS-TNC] TX ack to ${to} for msg ${msgId}`);
@@ -330,7 +362,7 @@ const descriptor = {
     }
 
     function connect() {
-      if (callsign === 'N0CALL') {
+      if (stationCall() === 'N0CALL') {
         console.warn('[APRS-TNC] Cannot start: configure your callsign in aprs.callsign');
         return;
       }
@@ -381,6 +413,11 @@ const descriptor = {
     }
 
     function disconnect() {
+      if (forwardTimer) {
+        clearTimeout(forwardTimer);
+        forwardTimer = null;
+      }
+      forwardQueue.length = 0;
       if (beaconTimer) {
         clearInterval(beaconTimer);
         beaconTimer = null;
@@ -406,13 +443,15 @@ const descriptor = {
         running: connection !== null,
         connected,
         protocol,
-        callsign: myCall,
+        callsign: myCallNow(),
         packetsRx,
         packetsTx,
         lastBeaconTime,
         host: protocol === 'kiss-tcp' ? cfg.host || '127.0.0.1' : undefined,
         port: protocol === 'kiss-tcp' ? cfg.port || 8001 : undefined,
         serialPort: protocol === 'kiss-serial' ? cfg.serialPort : undefined,
+        serverForward: forwardEnabled(),
+        ohcUrl: forwardEnabled() ? String(forwardUrl()?.origin || '') : undefined,
       };
     }
 

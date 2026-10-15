@@ -9,11 +9,15 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useRig } from '../contexts/RigContext.jsx';
 import { useLogbook } from '../hooks/useLogbook.js';
 import {
   consumePendingPrefill,
+  qsoMatchesFilter,
   registerPanelMount,
+  setViewFilter,
   subscribePrefill,
+  tunedSpotPrefill,
   unregisterPanelMount,
 } from '../services/logbookStore.js';
 import {
@@ -27,14 +31,39 @@ import { getPendingCount, onQsoLogged, processQueue, subscribeLogsync } from '..
 import CallsignLink from './CallsignLink.jsx';
 import { useCallsignPopup } from './CallsignPopupManager.jsx';
 import GroupLogSection from './GroupLogSection.jsx';
+import { IconMap } from './Icons.jsx';
+import { MAX_LOGBOOK_LINES, logbookLinesShown, useLogbookMapPoints } from '../utils/logbookMap.js';
 import QsoForm, { BANDS, inputStyle, smallBtnStyle } from './QsoForm.jsx';
 
 const MAX_ROWS = 200;
+
+const MAP_LAYER_ID = 'logbook-qsos';
+const MAP_SETTINGS_KEY = 'openhamclock_mapSettings';
+
+/** Is the "Logbook QSOs" map layer switched on? */
+const readMapLayerOn = () => {
+  try {
+    return !!JSON.parse(localStorage.getItem(MAP_SETTINGS_KEY) || '{}').layers?.[MAP_LAYER_ID]?.enabled;
+  } catch {
+    return false;
+  }
+};
 
 export const LogbookPanel = ({ userCallsign, myGrid }) => {
   const { t } = useTranslation();
   const { showPopup } = useCallsignPopup();
   const { qsos, add, update, remove, importAdif, exportAdif, stats } = useLogbook();
+
+  // Rig state is optional (same as QsoForm): +QSO offers the call of the spot
+  // the rig was tuned to, but only while the dial is still on it.
+  let rig = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    rig = useRig();
+  } catch {
+    rig = null;
+  }
+  const rigFreqHz = rig?.connected && rig.freq > 0 ? rig.freq : null;
 
   // Report presence to the store so the app-level LogQsoPopup only handles
   // "log this spot" requests when no Logbook panel is around to take them.
@@ -63,6 +92,16 @@ export const LogbookPanel = ({ userCallsign, myGrid }) => {
     }
   });
   const fileInputRef = useRef(null);
+  const [mapOn, setMapOn] = useState(readMapLayerOn);
+  // Follow the layer when it is switched elsewhere (Settings, command palette,
+  // keyboard shortcut) so the button never stays lit for a hidden layer.
+  useEffect(() => {
+    const onToggle = (e) => {
+      if (e.detail?.id === MAP_LAYER_ID) setMapOn(!!e.detail.enabled);
+    };
+    window.addEventListener('openhamclock-layer-toggle', onToggle);
+    return () => window.removeEventListener('openhamclock-layer-toggle', onToggle);
+  }, []);
 
   // Log-sync pending pushes (Wavelog/QRZ retry queue) — shown in the footer.
   // Mounting the panel also retries anything left over from a previous session.
@@ -140,20 +179,25 @@ export const LogbookPanel = ({ userCallsign, myGrid }) => {
   );
 
   const filtered = useMemo(() => {
-    const q = search.trim().toUpperCase();
-    return sorted.filter((rec) => {
-      if (bandFilter && rec.band !== bandFilter) return false;
-      if (modeFilter && (rec.mode || '').toUpperCase() !== modeFilter) return false;
-      if (!q) return true;
-      return (
-        (rec.call || '').toUpperCase().includes(q) ||
-        (rec.name || '').toUpperCase().includes(q) ||
-        (rec.comment || '').toUpperCase().includes(q)
-      );
-    });
+    const filter = { band: bandFilter, mode: modeFilter, search };
+    return sorted.filter((rec) => qsoMatchesFilter(rec, filter));
   }, [sorted, search, bandFilter, modeFilter]);
 
+  // Mirror the filter for the "Logbook QSOs" map layer, so the map shows what
+  // the table lists. Reset on unmount: with no panel there is no visible
+  // filter, so the map shows the whole log.
+  useEffect(() => {
+    setViewFilter({ band: bandFilter, mode: modeFilter, search: search.trim() });
+  }, [bandFilter, modeFilter, search]);
+  useEffect(() => () => setViewFilter(null), []);
+
   const visible = filtered.slice(0, MAX_ROWS);
+
+  // Dots the map layer draws for this selection — past MAX_LOGBOOK_LINES the
+  // lines from DE are left out, and the note below says how to get them back.
+  // Same hook as the map (published filter, cty.dat re-placement once it has
+  // loaded), so the note and the map can never disagree.
+  const mapDots = useLogbookMapPoints(mapOn).length;
 
   const bandOptions = useMemo(() => {
     const inLog = Object.keys(stats.byBand);
@@ -201,6 +245,25 @@ export const LogbookPanel = ({ userCallsign, myGrid }) => {
       setImportSummary({ error: String(err?.message || err) });
     }
     setTimeout(() => setImportSummary(null), 8000);
+  };
+
+  // Map button: toggles the "Logbook QSOs" layer. The map settings in
+  // localStorage are the source of truth (the layer can also be switched in
+  // Settings), so read them at click time.
+  const toggleMapLayer = () => {
+    const next = !readMapLayerOn();
+    if (window.hamclockLayerControls?.toggleLayer) {
+      window.hamclockLayerControls.toggleLayer(MAP_LAYER_ID, next);
+    } else {
+      // No map mounted right now — store it so the map starts with it on.
+      try {
+        const settings = JSON.parse(localStorage.getItem(MAP_SETTINGS_KEY) || '{}');
+        const layers = settings.layers || {};
+        layers[MAP_LAYER_ID] = { ...(layers[MAP_LAYER_ID] || {}), enabled: next };
+        localStorage.setItem(MAP_SETTINGS_KEY, JSON.stringify({ ...settings, layers }));
+      } catch {}
+    }
+    setMapOn(next);
   };
 
   const handleExport = () => {
@@ -259,7 +322,9 @@ export const LogbookPanel = ({ userCallsign, myGrid }) => {
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           <button
             type="button"
-            onClick={() => (showForm && !editingId ? setShowForm(false) : openNewForm())}
+            onClick={() =>
+              showForm && !editingId ? setShowForm(false) : openNewForm(tunedSpotPrefill(rigFreqHz) || {})
+            }
             title={t('logbook.newQsoTooltip', { defaultValue: 'Log a new QSO' })}
             aria-label={t('logbook.newQsoTooltip', { defaultValue: 'Log a new QSO' })}
             aria-pressed={showForm && !editingId}
@@ -299,6 +364,20 @@ export const LogbookPanel = ({ userCallsign, myGrid }) => {
             style={{ ...smallBtnStyle(false), cursor: stats.total === 0 ? 'not-allowed' : 'pointer' }}
           >
             {t('logbook.export', { defaultValue: 'Export' })}
+          </button>
+          <button
+            type="button"
+            onClick={toggleMapLayer}
+            title={t('logbook.mapTooltip', {
+              defaultValue: 'Show the QSOs listed below on the map (follows the band, mode and search filter)',
+            })}
+            aria-label={t('logbook.mapTooltip', {
+              defaultValue: 'Show the QSOs listed below on the map (follows the band, mode and search filter)',
+            })}
+            aria-pressed={mapOn}
+            style={smallBtnStyle(mapOn)}
+          >
+            <IconMap size={10} style={{ verticalAlign: 'middle' }} />
           </button>
           <input
             ref={fileInputRef}
@@ -391,6 +470,17 @@ export const LogbookPanel = ({ userCallsign, myGrid }) => {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {mapOn && !logbookLinesShown(mapDots) && (
+        <div role="status" style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+          {t('logbook.mapLinesHidden', {
+            defaultValue:
+              'Map: {{count}} dots — lines are shown for {{max}} or fewer. Narrow the band, mode or search filter to see them.',
+            count: mapDots,
+            max: MAX_LOGBOOK_LINES,
+          })}
         </div>
       )}
 

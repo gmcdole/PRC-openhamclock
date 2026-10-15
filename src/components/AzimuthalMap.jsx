@@ -119,6 +119,11 @@ export default function AzimuthalMap({
   mapBandFilter,
   pskReporterSpots,
   wsjtxSpots,
+  showAPRS = false,
+  aprsStations = null,
+  aprsWatchlistCalls = null,
+  showAPRSLabels = false,
+  aprsIconScale = 1,
   showDXPaths,
   showPOTA,
   showWWFF,
@@ -758,6 +763,46 @@ export default function AzimuthalMap({
       });
     }
 
+    // ── APRS stations (#1210) ────────────────────────────
+    // Same colours as the flat map's markers: amber watched, green local RF,
+    // cyan internet; optional callsign tag beside the dot.
+    if (showAPRS && aprsStations?.length > 0) {
+      const watch = aprsWatchlistCalls || new Set();
+      const scale = Number(aprsIconScale) > 0 ? Number(aprsIconScale) : 1; // #1214
+      ctx.save();
+      ctx.font = `${Math.round(10 * scale)}px "JetBrains Mono", monospace`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      aprsStations.forEach((station) => {
+        const lat = parseFloat(station.lat);
+        const lon = parseFloat(station.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        const isWatched = !!(watch.has?.(station.call) || watch.has?.(station.ssid));
+        const color = isWatched ? '#f59e0b' : station.source === 'local-tnc' ? '#4ade80' : '#22d3ee';
+        const p = toCanvas(lat, lon);
+        if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+        const r = (isWatched ? 5 : 4) * scale;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        if (showAPRSLabels) {
+          const label = station.ssid || station.call || '';
+          if (label) {
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+            ctx.strokeText(label, p.x + r + 3, p.y);
+            ctx.fillStyle = color;
+            ctx.fillText(label, p.x + r + 3, p.y);
+          }
+        }
+      });
+      ctx.restore();
+    }
+
     // ── WWBOTA spots ─────────────────────────────────────
     if (showWWBOTA && wwbotaSpots?.length > 0) {
       wwbotaSpots.forEach((spot) => {
@@ -856,6 +901,11 @@ export default function AzimuthalMap({
     showMutualReception,
     wsjtxSpots,
     showWSJTX,
+    showAPRS,
+    aprsStations,
+    aprsWatchlistCalls,
+    showAPRSLabels,
+    aprsIconScale,
     hideOverlays,
     toCanvas,
     useTiles,

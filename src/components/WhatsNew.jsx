@@ -8,8 +8,8 @@ import { useState, useEffect } from 'react';
 // ─── Announcement Banner ────────────────────────────────────
 // Set to null to hide. Shown at the top of the What's New modal.
 const ANNOUNCEMENT = {
-  emoji: '🕐',
-  text: '26.9.0 is a two-week release because the reports were too good to sit on. Michael, KE8PLM, ran DireWolf and OpenHamClock side by side for eleven hours and handed us the list of everything we were missing — that list is why your Yaesu and Kenwood beacons now show up. Jason Taggart sent the Mic-E decoder that started it. SQ8BWM fixed two things in his first two PRs, brstiefel1 diagnosed the stale kiosk weather down to the line, and onzarob confirmed the Yaesu tuning quirk. And someone asked for a big clock to fill the screen between nets, so there is one. 73 de K0CJH.',
+  emoji: '📡',
+  text: '26.10.0 comes six days after 26.9.0 because Michael, KE8PLM, took the new APRS decoder onto the air with a real TNC and filed eleven reports in a week — the first ever RF net check-in to land in the Net Roster happened during his testing, and most of what follows is his list. Koen, KoenVdH, landed three PRs: logbook QSOs on the map, logging the station you just tuned to, and a fixed contributor setup. twicklund76 brought Wavelog pull sync. And the APRS device names come from the aprs-deviceid table Hessu, OH7LZB, keeps for aprs.fi. 73 de K0CJH.',
   color: '#c9d1e6',
   bg: 'rgba(201, 209, 230, 0.10)',
   border: 'rgba(201, 209, 230, 0.30)',
@@ -28,6 +28,103 @@ const ANNOUNCEMENT = {
 // The jump to v26 resets the scheme to something meaningful going forward.
 
 const CHANGELOG = [
+  {
+    version: '26.10.3',
+    date: '2026-10-15',
+    heading:
+      'Hotfix: the Moon is back. NASA changed the links its Dial-A-Moon service hands out, and OpenHamClock had been refusing them since — so the Lunar panel showed a plain sliver and the 3D globe lost its moon. No action needed on your side once your server is updated.',
+    features: [
+      {
+        icon: '🌙',
+        title: 'FIX: Moon Image Missing from the Lunar Panel and the 3D Globe',
+        desc: "The Lunar panel shows NASA's photo-real render of today's moon and the 3D globe places it at its true position with the real phase. NASA's Dial-A-Moon API started returning plain http:// links for those images; the server's safety check only accepted https:// and rejected every one, so the image endpoint answered \"temporarily unavailable\" and the panel fell back to a drawn sliver. The check now accepts either scheme for a nasa.gov address and always fetches over https. Self-hosted: pull the update and restart; the hosted site is already fixed. Reported by K0CJH.",
+      },
+    ],
+  },
+  {
+    version: '26.10.2',
+    date: '2026-10-14',
+    heading:
+      'Hotfix for 26.10.1: the EmComm layout crashed on open for everyone, hosted and self-hosted. Reported by Michael, KE8PLM, within hours of the release — thank you.',
+    features: [
+      {
+        icon: '🚨',
+        title: 'FIX: EmComm Layout Crashed on Open',
+        desc: 'Opening EmComm mode showed "OpenHamClock hit an error — Cannot access \'xt\' before initialization" and the whole layout went down. The per-station message history added in 26.10.1 registered its "Messages ↗" listener above the function it calls, which React evaluates during render. Moved it below. If you were stuck on the error page, a hard refresh (Ctrl+F5) is all you need. Reported by KE8PLM (#1223).',
+      },
+    ],
+  },
+  {
+    version: '26.10.1',
+    date: '2026-10-14',
+    heading:
+      'Same-day follow-up to 26.10.0 with the four requests that were still open: APRS icons and tags you can size up for a big screen, an EmComm-only map that keeps roster stations visible, a per-station message history for whoever is running the net, and RF-heard stations shared with every browser on the server.',
+    features: [
+      {
+        icon: '🔍',
+        title: 'NEW: APRS Icon Size',
+        desc: 'A size button beside the Aa labels toggle — in the dockable APRS panel and the EmComm Stations header — cycles the APRS symbols and callsign tags through 0.75×, 1×, 1.25×, 1.5× and 2× on the flat map, the azimuthal view and the 3D globe. For a laptop in the field or a wall screen in an EOC. Remembered per browser. Requested by Michael, KE8PLM.',
+      },
+      {
+        icon: '🚨',
+        title: 'NEW: EmComm-Only Map',
+        desc: 'An EmComm only toggle in the EmComm Stations header keeps just the stations with a recognised EmComm symbol or a Net Roster entry on the map. A roster station whose beacon has aged out is put back from its last known position, so checking in never makes a station disappear from the map. Remembered per browser. Requested by KE8PLM.',
+      },
+      {
+        icon: '📜',
+        title: 'NEW: Message History per Station',
+        desc: 'Hover a Net Roster row, or press HIST on a roster or EmComm Stations row, and a panel lists every message exchanged with that station — received and sent, newest first, with time and direction — and a MSG button to reply. Messages ↗ in an APRS map popup opens the same panel, so a station that has dropped off the roster is still one click away. The server now keeps your own sent messages too, so both sides of a conversation appear. For the operator taking over a net who needs the last ten minutes in one glance. Requested by KE8PLM.',
+      },
+      {
+        icon: '📡',
+        title: 'RF Stations Shared Across Every Browser',
+        desc: 'On a Raspberry Pi or EOC server, the "Local RF" stations used to exist only in the one browser attached to Rig Bridge; every other computer saw an empty list. Rig Bridge\'s APRS TNC plugin now sends each received frame to the OpenHamClock server as well (server URL and on/off switch in its settings, on by default), so the server\'s station cache — and every browser reading it — sees RF stations whether or not a browser is connected to Rig Bridge. Frames that arrive both ways are counted once. Requested by Jason Taggart.',
+      },
+    ],
+  },
+  {
+    version: '26.10.0',
+    date: '2026-10-14',
+    heading:
+      'A one-week release built from on-air testing. Wavelog users can pull their log into OpenHamClock automatically, logbook QSOs draw on the map in all three projections, and logging the station you just tuned to is one click. The APRS panel grew up: sort by call, age or distance; callsign tags on the map; click a marker and the list scrolls to it; the radio or software behind each station is named; and stations now show on the azimuthal and 3D views. EmComm over RF got seven fixes, from net check-ins that never reached the roster to a clock that printed the seconds twice. Plus the sun is live again after NASA froze its images.',
+    features: [
+      {
+        icon: '🔄',
+        title: 'NEW: Wavelog Pull Sync',
+        desc: "If Wavelog is your logbook of record, OpenHamClock can now pull it. Settings → Integrations → Wavelog: paste the URL and API key, pick the station profiles, and the native logbook fills from Wavelog in pages of 2,000 QSOs, advancing its cursor only after each page is safely stored. Point Wavelog's MQTT at the server and a new QSO in Wavelog rings the doorbell so the pull happens within seconds instead of on a timer. Your browser keeps the credentials and the cursor; the server only proxies and listens. Wavelog stays the source of truth. By twicklund76.",
+      },
+      {
+        icon: '🗺️',
+        title: 'NEW: Your Logbook on the Map',
+        desc: "A map button in the Logbook panel toggles a Logbook QSOs layer: a dot per worked position in the band's colour with a great-circle line from your station, on the flat map, the azimuthal view and the 3D globe. It follows the panel's band, mode and search filter, so the map shows exactly the QSOs the table lists; close the panel and the whole log shows. QSOs are placed by logged grid, falling back to the DXCC entity's position (drawn hollow) when there is none, and grouped per position and band with a popup listing the calls. Lines are drawn up to 500 dots; past that only dots, with a note, so a 10,000-QSO log does not become a white web. Measured at 11 ms to build the points for 10,000 QSOs. By Koen, KoenVdH.",
+      },
+      {
+        icon: '📓',
+        title: 'NEW: Log the Station You Just Tuned To',
+        desc: 'Click a spot to tune the rig, work the station, then press +QSO in the Logbook panel: the call and grid are already filled in, as long as the rig is still within 3 kHz of the spot. The Rig button in an open QSO form does the same, and clears a call that came from a spot once you have tuned well away from it — a call you typed yourself is never touched. The memory is dropped the moment a QSO with that call is saved, and nothing is remembered unless rig control is on. By Koen, KoenVdH.',
+      },
+      {
+        icon: '📡',
+        title: 'The APRS Panel Grows Up',
+        desc: "Five requests from a week of on-air testing by Michael, KE8PLM. Sort the station list by call, age or distance from a Sort row, remembered per browser. An Aa button draws callsign tags beside the APRS symbols on the map, in the dockable panel and the EmComm layout. Click a station on the map and the panel scrolls to its row and highlights it; click a row and the map pans and pulses on the station on all three views, not just the flat map. Each station now shows the radio or software that sent it — Yaesu FT5D, Kenwood TM-D710, DireWolf — identified from the packet's tocall or Mic-E type code using the aprs-deviceid table Hessu, OH7LZB, maintains for aprs.fi; the raw Mic-E type bytes that used to trail the comment are gone. And APRS stations finally draw on the azimuthal and 3D views, which only ever had the flat map.",
+      },
+      {
+        icon: '🚨',
+        title: 'FIX: EmComm Over RF, Seven Ways',
+        desc: 'All found by KE8PLM with a real TNC. Net check-ins sent over RF never reached the Net Roster: the browser dropped every non-position frame, and even the server path never applied the command — RF frames are now forwarded to the server and both paths apply check-ins and check-outs, so CQ NETNAME over the air works for the first time. A Yaesu\'s message id ({02 plus a carriage return) no longer trails the status text. Replies went out under the SSID rig-bridge started with rather than the one you saved; the APRS TNC plugin now reads your callsign and SSID live. The Event Log\'s Clear button really clears instead of re-logging the whole board. The header printed the seconds twice and no date; it shows the UTC date and time once. An ordinary message containing the word "open" no longer turns its sender into a Nearby Shelter. And FEMA disaster declarations, which arrived as one identical row per county, are grouped per declaration with dates, counties, a link to fema.gov and a source line.',
+      },
+      {
+        icon: '☀️',
+        title: 'FIX: Solar Images Are Live Again',
+        desc: 'NASA\'s "latest" SDO images stopped updating on September 21 while still answering requests, so every instance showed a three-week-old sun. Each image source now reports its date; anything older than three hours is skipped for the next source (LMSAL, then SOHO), and if nothing fresh answers the freshest stale image is served rather than a broken panel. This went to the hosted site as a silent hotfix on October 8 and ships to self-hosters here.',
+      },
+      {
+        icon: '🧹',
+        title: 'Fixes and Housekeeping',
+        desc: "The daily satellite transmitter refresh no longer pages the uptime monitor every afternoon. October security advisories cleared across the packages. Under the Vite dev server the P.533 propagation engine loads again, the vendor download script works on macOS, and CONTRIBUTING's quick start includes the step it was missing — all by Koen, KoenVdH, from a fresh clone. The HF propagation service image builds natively per architecture instead of under emulation. Two APRS parser regexes CodeQL flagged are bounded. Dead code in the Rig Bridge APRS TNC plugin removed.",
+      },
+    ],
+  },
   {
     version: '26.9.0',
     date: '2026-10-08',
@@ -1872,6 +1969,7 @@ const LS_KEY = 'openhamclock_lastSeenVersion';
 export default function WhatsNew({ showWhatsNew }) {
   const [visible, setVisible] = useState(false);
   const [currentVersion, setCurrentVersion] = useState(null);
+  const [lastSeenVersion, setLastSeenVersion] = useState(null);
 
   useEffect(() => {
     // Fetch the running version from the server
@@ -1885,6 +1983,7 @@ export default function WhatsNew({ showWhatsNew }) {
         setCurrentVersion(version);
 
         const lastSeen = localStorage.getItem(LS_KEY);
+        setLastSeenVersion(lastSeen);
         // Show if never seen, or if the stored version differs from current
         if (!lastSeen || lastSeen !== version) {
           // Only show if we actually have changelog entries for this version
@@ -1922,7 +2021,16 @@ export default function WhatsNew({ showWhatsNew }) {
 
   if (!visible || !currentVersion) return null;
 
-  const entry = CHANGELOG.find((c) => c.version === currentVersion) || CHANGELOG[0];
+  // Every entry newer than the version this browser last saw, newest first.
+  // Someone who updated 26.10.0 → 26.10.1 within the hour never saw the
+  // 26.10.0 notes; showing only the running version's entry lost them.
+  // CHANGELOG is newest-first, so the slice runs from the current entry up
+  // to (not including) the last-seen one. Unknown last-seen (fresh install,
+  // or opened from the header link) shows just the current entry.
+  const ci = CHANGELOG.findIndex((c) => c.version === currentVersion);
+  const li = lastSeenVersion ? CHANGELOG.findIndex((c) => c.version === lastSeenVersion) : -1;
+  const entries = ci >= 0 && li > ci ? CHANGELOG.slice(ci, li) : [CHANGELOG[Math.max(ci, 0)]].filter(Boolean);
+  const entry = entries[0];
   if (!entry) return null;
 
   return (
@@ -1981,7 +2089,9 @@ export default function WhatsNew({ showWhatsNew }) {
                 marginBottom: '8px',
               }}
             >
-              OpenHamClock v{entry.version}
+              {entries.length > 1
+                ? `OpenHamClock v${entries[entries.length - 1].version} → v${entry.version}`
+                : `OpenHamClock v${entry.version}`}
             </div>
             <div
               style={{
@@ -2043,48 +2153,70 @@ export default function WhatsNew({ showWhatsNew }) {
 
           {/* Feature list */}
           <div style={{ padding: '0 24px 16px' }}>
-            {entry.features.map((f, i) => (
-              <div
-                key={i}
-                style={{
-                  display: 'flex',
-                  gap: '12px',
-                  padding: '10px 0',
-                  borderBottom: i < entry.features.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '20px',
-                    lineHeight: '28px',
-                    flexShrink: 0,
-                    width: '28px',
-                    textAlign: 'center',
-                  }}
-                >
-                  {f.icon}
-                </div>
-                <div>
+            {entries.map((en, idx) => (
+              <div key={en.version}>
+                {idx > 0 && (
+                  <div style={{ marginTop: '14px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--accent-cyan, #00ffcc)',
+                        letterSpacing: '0.1em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      v{en.version} · {en.date}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted, #888)', marginTop: '4px' }}>
+                      {en.heading}
+                    </div>
+                  </div>
+                )}
+                {en.features.map((f, i) => (
                   <div
+                    key={i}
                     style={{
-                      fontWeight: '600',
-                      fontSize: '14px',
-                      color: 'var(--text-primary, #e0e0e0)',
-                      marginBottom: '3px',
+                      display: 'flex',
+                      gap: '12px',
+                      padding: '10px 0',
+                      borderBottom: i < en.features.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
                     }}
                   >
-                    {f.title}
+                    <div
+                      style={{
+                        fontSize: '20px',
+                        lineHeight: '28px',
+                        flexShrink: 0,
+                        width: '28px',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {f.icon}
+                    </div>
+                    <div>
+                      <div
+                        style={{
+                          fontWeight: '600',
+                          fontSize: '14px',
+                          color: 'var(--text-primary, #e0e0e0)',
+                          marginBottom: '3px',
+                        }}
+                      >
+                        {f.title}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          lineHeight: '1.5',
+                          color: 'var(--text-muted, #999)',
+                        }}
+                      >
+                        {f.desc}
+                      </div>
+                    </div>
                   </div>
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      lineHeight: '1.5',
-                      color: 'var(--text-muted, #999)',
-                    }}
-                  >
-                    {f.desc}
-                  </div>
-                </div>
+                ))}
               </div>
             ))}
           </div>

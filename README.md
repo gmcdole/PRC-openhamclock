@@ -281,6 +281,7 @@ Open pull requests against **`Staging`**, not `main`. Read **[CONTRIBUTING.md](C
 - **NASA** — Imagery, EONET hazards data, and the ISS 3D model (NASA/VTAD)
 - **KC2G / GIRO** — Ionospheric sounding data ([acknowledgements](https://giro.uml.edu/didbase/acknowledgements.html))
 - **AD1C** — cty.dat DXCC entity database
+- **Hessu, OH7LZB / aprs.fi** — [aprs-deviceid](https://github.com/aprsorg/aprs-deviceid) APRS device identification table (CC BY-SA 2.0)
 - **NG3K** — DXpedition listing
 - **DXNews.com / DX-World** — DX news headlines
 - **WA7BNM** — Contest calendar data

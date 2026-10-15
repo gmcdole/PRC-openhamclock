@@ -14,13 +14,20 @@ import {
   count,
   dedupKey,
   getAll,
+  getViewFilter,
   hasMountedPanel,
   init,
+  qsoMatchesFilter,
   registerPanelMount,
   remove,
   requestLogQso,
+  setTunedSpot,
+  setViewFilter,
   subscribe,
   subscribePrefill,
+  subscribeViewFilter,
+  tunedSpotForRig,
+  tunedSpotPrefill,
   unregisterPanelMount,
   update,
 } from './logbookStore.js';
@@ -186,6 +193,89 @@ describe('log-from-spot prefill hand-off', () => {
     requestLogQso(null);
     requestLogQso({ freq: 14.2 });
     expect(consumePendingPrefill()).toBe(null);
+  });
+});
+
+describe('tuned-spot prefill for +QSO', () => {
+  it('offers the call while the rig is within 3 kHz of the spot', () => {
+    setTunedSpot({ call: 'zl1xyz', freqHz: 14025000, gridsquare: 'RF73' });
+    expect(tunedSpotPrefill(14025000)).toEqual({ call: 'ZL1XYZ', gridsquare: 'RF73' });
+    expect(tunedSpotPrefill(14025600)).toEqual({ call: 'ZL1XYZ', gridsquare: 'RF73' });
+    expect(tunedSpotPrefill(14022000)).toEqual({ call: 'ZL1XYZ', gridsquare: 'RF73' });
+  });
+
+  it('offers nothing once the dial has moved away', () => {
+    setTunedSpot({ call: 'ZL1XYZ', freqHz: 14025000 });
+    expect(tunedSpotPrefill(14030000)).toBe(null);
+    expect(tunedSpotPrefill(7025000)).toBe(null);
+  });
+
+  it('offers nothing without a rig reading or without a tuned spot', () => {
+    expect(tunedSpotPrefill(14025000)).toBe(null);
+    setTunedSpot({ call: 'ZL1XYZ', freqHz: 14025000 });
+    expect(tunedSpotPrefill(null)).toBe(null);
+    expect(tunedSpotPrefill(0)).toBe(null);
+  });
+
+  it('leaves gridsquare out when the spot had none', () => {
+    setTunedSpot({ call: 'W1AW', freqHz: 7030000 });
+    expect(tunedSpotPrefill(7030000)).toEqual({ call: 'W1AW' });
+  });
+
+  it('ignores spots without a call or frequency', () => {
+    setTunedSpot({ call: '', freqHz: 14025000 });
+    setTunedSpot({ call: 'W1AW', freqHz: 0 });
+    setTunedSpot(null);
+    expect(tunedSpotPrefill(14025000)).toBe(null);
+  });
+
+  it('forgets the call once a QSO with it is saved (any letter case)', async () => {
+    setTunedSpot({ call: 'ZL1XYZ', freqHz: 14025000 });
+    await add(sampleQso({ call: 'zl1xyz' }));
+    expect(tunedSpotPrefill(14025000)).toBe(null);
+  });
+
+  it('tells the Rig button whether the rig is still near the spot', () => {
+    expect(tunedSpotForRig(14025000)).toBe(null); // nothing remembered
+    setTunedSpot({ call: 'ZL1XYZ', freqHz: 14025000, gridsquare: 'RF73' });
+    expect(tunedSpotForRig(14026000)).toEqual({ call: 'ZL1XYZ', gridsquare: 'RF73', near: true });
+    expect(tunedSpotForRig(14040000)).toEqual({ call: 'ZL1XYZ', gridsquare: 'RF73', near: false });
+    expect(tunedSpotForRig(null)).toBe(null); // no rig reading
+  });
+
+  it('keeps the call when a QSO with another station is saved', async () => {
+    setTunedSpot({ call: 'ZL1XYZ', freqHz: 14025000 });
+    await add(sampleQso({ call: 'OZ1ABC' }));
+    expect(tunedSpotPrefill(14025000)).toEqual({ call: 'ZL1XYZ' });
+  });
+});
+
+describe('view filter (Logbook panel → map)', () => {
+  const rec = { call: 'OZ1ABC', band: '20m', mode: 'SSB', name: 'Lars', comment: 'POTA DK-0001' };
+
+  it('matches band, mode (any case) and search in call / name / comment', () => {
+    expect(qsoMatchesFilter(rec, undefined)).toBe(true);
+    expect(qsoMatchesFilter(rec, { band: '20m' })).toBe(true);
+    expect(qsoMatchesFilter(rec, { band: '40m' })).toBe(false);
+    expect(qsoMatchesFilter(rec, { mode: 'ssb' })).toBe(true);
+    expect(qsoMatchesFilter(rec, { mode: 'CW' })).toBe(false);
+    expect(qsoMatchesFilter(rec, { search: 'oz1' })).toBe(true);
+    expect(qsoMatchesFilter(rec, { search: 'lars' })).toBe(true);
+    expect(qsoMatchesFilter(rec, { search: 'dk-0001' })).toBe(true);
+    expect(qsoMatchesFilter(rec, { search: 'W1AW' })).toBe(false);
+  });
+
+  it('publishes filter changes to subscribers and resets on null', () => {
+    const cb = vi.fn();
+    const unsub = subscribeViewFilter(cb);
+    setViewFilter({ band: '20m' });
+    expect(getViewFilter()).toEqual({ band: '20m', mode: '', search: '' });
+    setViewFilter({ band: '20m' }); // unchanged → no notification
+    expect(cb).toHaveBeenCalledTimes(1);
+    setViewFilter(null);
+    expect(getViewFilter()).toEqual({ band: '', mode: '', search: '' });
+    expect(cb).toHaveBeenCalledTimes(2);
+    unsub();
   });
 });
 
