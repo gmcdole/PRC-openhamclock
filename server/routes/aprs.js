@@ -35,6 +35,15 @@ module.exports = function (app, ctx) {
   let aprsConnected = false;
   let aprsBuffer = '';
 
+  // Telemetry stores (EmComm Phase 6). The declarations were lost in the
+  // shared-position-parser refactor (#1194) while every use survived, so each
+  // T# frame threw a ReferenceError inside parseAprsTelemetry's try/catch and
+  // GET /api/aprs/telemetry 500'd.
+  const telemetryDefs = new Map(); // callsign → { params, units, eqns }
+  const telemetryData = new Map(); // callsign → { call, seq, values[], bits, timestamp, source, history[] }
+  const TELEMETRY_HISTORY_MAX = 60; // samples kept per station for trend charts
+  const TELEMETRY_MAX_STATIONS = 100;
+
   // T# telemetry frames and PARM/UNIT/EQNS definitions (positions: see parseAprsPacket)
   function parseAprsTelemetry(line) {
     try {

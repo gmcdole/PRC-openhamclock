@@ -81,7 +81,10 @@ let serverConfig = null;
  */
 export const fetchServerConfig = async () => {
   try {
-    const response = await fetch('/api/config');
+    // no-store: the API cache middleware marks /api/config cacheable for an
+    // hour, so after an update the auto-reload still read the old response
+    // and the version badge beside the callsign lagged behind the server.
+    const response = await fetch('/api/config', { cache: 'no-store' });
     if (response.ok) {
       serverConfig = await response.json();
       // Only log if server has real config (not defaults)

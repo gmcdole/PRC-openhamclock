@@ -76,6 +76,8 @@ export const SettingsPanel = ({
   mapLayers,
   onToggleDeDxMarkers,
   onToggleDXNews,
+  onToggleAPRS,
+  onToggleAPRSLabels,
   wakeLockStatus,
   defaultTab,
   wsjtxSessionId,
@@ -4676,6 +4678,32 @@ export const SettingsPanel = ({
                     helpTopic: 'spots-activity',
                   },
                 ];
+                // Built-in (non-plugin) switches shown under Amateur Radio. The
+                // APRS layer defaults to on and, outside the Dockable layout's
+                // APRS panel, had no off switch anywhere — users with a Rig
+                // Bridge TNC asked what the framed symbols were and how to hide them.
+                const amateurCards = [
+                  {
+                    id: 'aprs-stations',
+                    checked: mapLayers?.showAPRS !== false,
+                    onChange: () => onToggleAPRS?.(),
+                    icon: '📡',
+                    title: 'APRS Stations',
+                    description:
+                      'APRS symbols on the map — green frame: heard over RF by your TNC, cyan: APRS-IS internet, amber: watchlist',
+                    helpTopic: 'emcomm-mesh',
+                  },
+                  {
+                    id: 'aprs-labels',
+                    checked: !!mapLayers?.showAPRSLabels,
+                    onChange: () => onToggleAPRSLabels?.(),
+                    icon: '🏷️',
+                    title: 'APRS Callsign Labels',
+                    description: 'Draw the callsign beside each APRS symbol',
+                    helpTopic: 'emcomm-mesh',
+                  },
+                ];
+                const builtInCards = { overlay: overlayCards, amateur: amateurCards };
                 return (() => {
                   const categoryOrder = [
                     { key: 'overlay', label: '🗺️ Map Overlays' },
@@ -4885,7 +4913,7 @@ export const SettingsPanel = ({
                   const result = [];
                   const rendered = new Set();
                   categoryOrder.forEach(({ key, label }) => {
-                    const hasBuiltInOverlays = key === 'overlay' && overlayCards.length > 0;
+                    const hasBuiltInOverlays = (builtInCards[key] || []).length > 0;
                     if (!grouped[key] && !hasBuiltInOverlays) return;
                     if ((!grouped[key] || grouped[key].length === 0) && !hasBuiltInOverlays) return;
                     result.push(
@@ -4905,11 +4933,9 @@ export const SettingsPanel = ({
                         {label}
                       </div>,
                     );
-                    if (key === 'overlay') {
-                      overlayCards.forEach((item) => {
-                        result.push(renderBuiltInOverlayCard(item));
-                      });
-                    }
+                    (builtInCards[key] || []).forEach((item) => {
+                      result.push(renderBuiltInOverlayCard(item));
+                    });
                     (grouped[key] || []).forEach((layer) => {
                       result.push(renderLayerCard(layer));
                       rendered.add(layer.id);

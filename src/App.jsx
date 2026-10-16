@@ -962,6 +962,8 @@ const App = () => {
         mapLayers={mapLayers}
         onToggleDeDxMarkers={toggleDeDxMarkers}
         onToggleDXNews={toggleDXNews}
+        onToggleAPRS={toggleAPRS}
+        onToggleAPRSLabels={toggleAPRSLabels}
         wakeLockStatus={wakeLockStatus}
         wsjtxSessionId={wsjtx.sessionId}
         isLocalInstall={isLocalInstall}

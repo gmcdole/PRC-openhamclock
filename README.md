@@ -210,7 +210,7 @@ Full codebase map: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 ## Updating
 
 - **Hosted site** — nothing to do; a toast appears when a new version deploys.
-- **Git installs** — `./scripts/update.sh` (Linux/macOS/Pi) or `.\scripts\update.ps1` (Windows), then restart. Local installs also get an **UPDATE** button in the header. Optional auto-update via `AUTO_UPDATE_ENABLED=true`.
+- **Git installs** — `./scripts/update.sh` (Linux/macOS/Pi) or `.\scripts\update.ps1` (Windows), then restart. Local installs also get an **UPDATE** button in the header. Optional auto-update via `AUTO_UPDATE_ENABLED=true`. If an update was cut off part way (SSH session dropped, out of memory) and the server will not start, `./scripts/update.sh --repair` reinstalls the dependencies and rebuilds; the script also offers this itself when it finds the install incomplete.
 - **Docker** — `docker compose pull && docker compose up -d`.
 - **Railway** — push to the connected repo, or `railway up`.
 

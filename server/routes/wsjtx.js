@@ -6,26 +6,22 @@
 const dgram = require('dgram');
 const fs = require('fs');
 const path = require('path');
-const { initCtyData, getCtyData, lookupCall } = require('../../src/server/ctydat.js');
-const { maidenheadToLatLon, getBandFromHz } = require('../utils/grid.js');
+const { getCtyData, lookupCall } = require('../../src/server/ctydat.js');
+const { maidenheadToLatLon } = require('../utils/grid.js');
 
 module.exports = function (app, ctx) {
   const {
     fetch,
     CONFIG,
-    APP_VERSION,
     ROOT_DIR,
-    logDebug,
-    logInfo,
-    logWarn,
     logErrorOnce,
     writeLimiter,
     requireWriteAuth,
     extractBaseCallsign,
     estimateLocationFromPrefix,
-    extractGridFromComment,
     lookupCallsignLocation,
     callsignLookupCache,
+    PORT,
   } = ctx;
 
   // Receives decoded messages from WSJT-X, JTDX, etc.
@@ -950,7 +946,7 @@ module.exports = function (app, ctx) {
     try {
       wsjtxSocket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
-      wsjtxSocket.on('message', (buf, rinfo) => {
+      wsjtxSocket.on('message', (buf) => {
         const msg = parseWSJTXMessage(buf);
         if (msg) handleWSJTXMessage(msg);
       });
