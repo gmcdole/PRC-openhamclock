@@ -26,11 +26,32 @@
  *   relayWsjtx:     boolean  Relay WSJT-X decodes (default: true)
  *   relayAprs:      boolean  Relay APRS packets (default: true)
  *   verbose:        boolean  Log all relay activity (default: false)
+ *   commandKey:     string   64-hex key shared with the browser that pressed
+ *                            Connect Cloud Relay (never sent to the server).
+ *                            When set, every command must carry a valid
+ *                            HMAC (lib/relay-sign.js) or it is refused.
+ *   allowUnsigned:  boolean  Accept unsigned commands of every kind, as before
+ *                            command signing existed (default: false — unsafe)
+ *   unsignedGraceUntil: string  Without a commandKey, unsigned tuning
+ *                            (setFreq / setMode) is still accepted until this
+ *                            date (default '2027-01-31'); PTT and anything that
+ *                            transmits never is.
+ *
+ * Command authentication: the hosted server only queues commands, and anyone
+ * who learns a session id can queue one, so Rig Bridge decides. See
+ * authorizeCommand() below.
  */
 
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { nextLongPollDelay, heartbeatDue } = require('../lib/relay-timing');
+const { createCommandVerifier, isValidKey, deriveReadToken, readTokenHash } = require('../lib/relay-sign');
+
+// Unsigned commands a bridge that has not been re-paired still accepts during
+// the grace period: they tune, they never transmit.
+const LEGACY_UNSIGNED_TYPES = new Set(['setFreq', 'setMode']);
+const DEFAULT_UNSIGNED_GRACE_UNTIL = '2027-01-31';
 
 let _currentInstance = null;
 
@@ -53,6 +74,72 @@ const descriptor = {
     const apiKey = cfg.apiKey || '';
     const session = cfg.session || '';
     const pushInterval = cfg.pushInterval || 2000; // Fallback interval for data batches
+
+    // ── Command authentication ─────────────────────────────────────────────
+    // Read live so a key pasted into the setup page applies without a restart
+    const live = () => config.cloudRelay || cfg;
+    const commandKey = () =>
+      String(live().commandKey || '')
+        .trim()
+        .toLowerCase();
+    const verifier = createCommandVerifier({ key: commandKey, session: () => session });
+    const graceUntil = (() => {
+      const t = Date.parse(cfg.unsignedGraceUntil || DEFAULT_UNSIGNED_GRACE_UNTIL);
+      return Number.isFinite(t) ? t : Date.parse(DEFAULT_UNSIGNED_GRACE_UNTIL);
+    })();
+    // sha256 of the relay read token (lib/relay-sign deriveReadToken); '' unpaired
+    let readHashCache = { key: null, hash: '' };
+    function readHash() {
+      const k = commandKey();
+      if (readHashCache.key !== k) {
+        readHashCache = { key: k, hash: isValidKey(k) ? readTokenHash(deriveReadToken(k, session)) : '' };
+      }
+      return readHashCache.hash;
+    }
+    const warnedAt = new Map(); // reason → last log time
+    let refusedCommands = 0;
+
+    // Every plugin-bus listener this instance adds, so disconnect() can remove
+    // them all — otherwise each restart of the relay added another set.
+    let busListeners = [];
+    let running = false;
+    function onBus(event, fn) {
+      pluginBus.on(event, fn);
+      busListeners.push([event, fn]);
+    }
+    function warnOnce(key, msg, everyMs = 3600000) {
+      const t = Date.now();
+      if (t - (warnedAt.get(key) || 0) < everyMs) return;
+      warnedAt.set(key, t);
+      console.warn(`[CloudRelay] ${msg}`);
+    }
+
+    /**
+     * Decide whether a relayed command may run.
+     *  - paired (commandKey set): only a valid, fresh, unreplayed signature.
+     *  - not paired: allowUnsigned restores the old accept-everything
+     *    behaviour; otherwise tuning only, and only until unsignedGraceUntil.
+     * @returns {{ ok: boolean, reason?: string }}
+     */
+    function authorizeCommand(cmd) {
+      const paired = isValidKey(commandKey());
+      const r = verifier.verify(cmd);
+      if (r.ok) return r;
+      if (paired) return r;
+      if (live().allowUnsigned === true) {
+        warnOnce('allow', 'allowUnsigned is on — relay commands are accepted without proof they came from you');
+        return { ok: true };
+      }
+      if (LEGACY_UNSIGNED_TYPES.has(cmd?.type) && Date.now() < graceUntil) {
+        warnOnce(
+          'grace',
+          `Accepting unsigned ${cmd.type} until ${new Date(graceUntil).toISOString().slice(0, 10)} — ` +
+            're-run Connect Cloud Relay in OpenHamClock and paste the new settings (they include a command key)',
+        );
+        return { ok: true };
+      }
+      return { ok: false, reason: 'unsigned-refused' };
+    }
     const { state, pluginBus, onStateChange, removeStateChangeListener } = services;
 
     let pushTimer = null;
@@ -67,6 +154,7 @@ const descriptor = {
     let totalCommands = 0;
     let totalDecodes = 0;
     let consecutiveErrors = 0;
+    let lastPushAt = 0; // last successful push, for the heartbeat
     let lastState = {};
     let pendingDecodes = []; // Batched decodes to push
     let pendingAprs = []; // Batched APRS packets to push
@@ -87,6 +175,10 @@ const descriptor = {
         Authorization: `Bearer ${apiKey}`,
         'X-Relay-Session': session,
       };
+      // Register the read-token hash on every authenticated request, so the
+      // server protects this session's reads even right after it restarts.
+      const rh = readHash();
+      if (rh) headers['X-Relay-Read-Hash'] = rh;
 
       const options = {
         hostname: parsed.hostname,
@@ -168,12 +260,21 @@ const descriptor = {
         currentState.ptt !== lastState.ptt ||
         currentState.connected !== lastState.connected;
 
-      // Only push if state changed or there's data to send
-      if (!stateChanged && !hasDecodes && !hasAprs && !hasMeshCom) return;
+      // Only push if state changed or there's data to send — or a heartbeat is
+      // due: the server forgets sessions on restart and after an idle TTL, and
+      // an unchanged rig would otherwise never re-register.
+      const hasData = hasDecodes || hasAprs || hasMeshCom;
+      if (!stateChanged && !hasData && !heartbeatDue(Date.now(), lastPushAt)) return;
       lastState = { ...currentState };
 
       // Include batched data in the push
-      const payload = { ...currentState, session };
+      // commandAuth tells the server to refuse unsigned commands for this session
+      const payload = {
+        ...currentState,
+        session,
+        commandAuth: isValidKey(commandKey()) ? 'hmac-sha256' : 'none',
+        ...(readHash() ? { readTokenHash: readHash() } : {}),
+      };
       if (hasDecodes) {
         payload.decodes = pendingDecodes.splice(0, 50);
         totalDecodes += payload.decodes.length;
@@ -200,6 +301,7 @@ const descriptor = {
           serverReachable = true;
           consecutiveErrors = 0;
           totalPushed++;
+          lastPushAt = Date.now();
           if (cfg.verbose) {
             const decodeInfo = payload.decodes ? ` + ${payload.decodes.length} decodes` : '';
             console.log(`[CloudRelay] Pushed state (${currentState.freq} Hz ${currentState.mode}${decodeInfo})`);
@@ -213,12 +315,14 @@ const descriptor = {
     // Long-poll loop — holds the connection open for up to LONG_POLL_WAIT ms.
     // The server resolves the request immediately when a command is queued,
     // so latency is ~network RTT rather than the push interval.
-    // On timeout (no commands) it restarts immediately. On network error it
-    // waits 1 s before retrying to avoid hammering a temporarily unreachable server.
+    // On timeout (no commands) it restarts immediately. On network error, or an
+    // empty response the server did not hold, it waits before retrying — see
+    // lib/relay-timing.js.
     const LONG_POLL_WAIT = 28000; // ms to hold open (server caps at 30 s)
 
     function longPollCommands() {
       if (pollAborted) return;
+      const startedAt = Date.now();
       const url =
         `${serverUrl}/api/rig-bridge/relay/commands` + `?session=${encodeURIComponent(session)}&wait=${LONG_POLL_WAIT}`;
 
@@ -229,21 +333,24 @@ const descriptor = {
         (err, status, data) => {
           if (pollAborted) return;
 
-          if (!err && status === 200) {
+          if (!err && (status === 401 || status === 403)) {
+            // Invalid credentials — stop permanently, no retry
+            handleCredentialsInvalid(status, data);
+            return;
+          }
+          const ok = !err && status === 200;
+          let commandCount = 0;
+          if (ok) {
             try {
               const response = JSON.parse(data);
               const commands = response.commands || [];
+              commandCount = commands.length;
               for (const cmd of commands) executeCommand(cmd);
             } catch (e) {}
-            // Restart immediately — no delay when things are healthy
-            longPollCommands();
-          } else if (!err && (status === 401 || status === 403)) {
-            // Invalid credentials — stop permanently, no retry
-            handleCredentialsInvalid(status, data);
-          } else {
-            // Network error or unexpected status — back off 1 s before retry
-            pollRetryTimer = setTimeout(longPollCommands, 1000);
           }
+          const delay = nextLongPollDelay({ ok, elapsedMs: Date.now() - startedAt, commandCount });
+          if (delay === 0) longPollCommands();
+          else pollRetryTimer = setTimeout(longPollCommands, delay);
         },
         LONG_POLL_WAIT + 4000, // HTTP timeout = hold window + 4 s network buffer
       );
@@ -254,6 +361,29 @@ const descriptor = {
     // All requests have an error handler to prevent unhandled-error crashes.
     function executeCommand(cmd) {
       totalCommands++;
+      const verdict = authorizeCommand(cmd);
+      if (!verdict.ok) {
+        refusedCommands++;
+        warnOnce(
+          `refused-${verdict.reason}`,
+          `Refused relay command ${cmd?.type} (${verdict.reason})` +
+            (verdict.reason === 'unsigned-refused' || verdict.reason === 'unsigned'
+              ? ' — re-run Connect Cloud Relay in OpenHamClock and paste the new settings into Rig Bridge'
+              : ''),
+          60000,
+        );
+        if (cmd?.type === 'fldigi' && pluginBus && cmd.payload?.requestId) {
+          pluginBus.emit('fldigi-cmd-result', {
+            requestId: String(cmd.payload.requestId)
+              .replace(/[^A-Za-z0-9-]/g, '')
+              .slice(0, 40),
+            ok: false,
+            status: 401,
+            error: `Relay command refused by Rig Bridge (${verdict.reason})`,
+          });
+        }
+        return;
+      }
       if (cfg.verbose) console.log(`[CloudRelay] Command: ${cmd.type} ${JSON.stringify(cmd.payload || {})}`);
 
       const localMod = config.tls?.enabled ? https : http;
@@ -309,7 +439,22 @@ const descriptor = {
         return;
       }
 
+      if (running) return; // already connected — never subscribe twice
+      running = true;
+      pollAborted = false;
+
       console.log(`[CloudRelay] Starting relay to ${serverUrl}`);
+      if (commandKey() && !isValidKey(commandKey())) {
+        console.warn(
+          '[CloudRelay] commandKey is not 64 hex characters — ignored; paste it again from Connect Cloud Relay',
+        );
+      } else if (!commandKey()) {
+        console.warn(
+          '[CloudRelay] No commandKey: PTT and transmit commands from the relay are refused, tuning is accepted until ' +
+            new Date(graceUntil).toISOString().slice(0, 10) +
+            ' — re-run Connect Cloud Relay in OpenHamClock and paste the new settings',
+        );
+      }
       console.log(`[CloudRelay] Push interval: ${pushInterval}ms, Command delivery: long-poll`);
 
       // Initial health check
@@ -361,7 +506,7 @@ const descriptor = {
         const subscribed = [];
 
         if (relayWsjtx) {
-          pluginBus.on('decode', (msg) => {
+          onBus('decode', (msg) => {
             pendingDecodes.push({
               source: msg.source,
               message: msg.message,
@@ -377,14 +522,14 @@ const descriptor = {
           subscribed.push('WSJT-X');
         }
         if (relayAprs) {
-          pluginBus.on('aprs', (packet) => {
+          onBus('aprs', (packet) => {
             pendingAprs.push(packet);
             if (pendingAprs.length > 200) pendingAprs.splice(0, pendingAprs.length - 200);
           });
           subscribed.push('APRS');
         }
         if (relayMeshCom) {
-          pluginBus.on('meshcom', (packet) => {
+          onBus('meshcom', (packet) => {
             pendingMeshCom.push(packet);
             if (pendingMeshCom.length > 200) pendingMeshCom.splice(0, pendingMeshCom.length - 200);
           });
@@ -412,6 +557,10 @@ const descriptor = {
       if (stateChangeHandler && typeof removeStateChangeListener === 'function') {
         removeStateChangeListener(stateChangeHandler);
       }
+      stateChangeHandler = null;
+      for (const [event, fn] of busListeners) pluginBus.removeListener(event, fn);
+      busListeners = [];
+      running = false;
       _currentInstance = null;
       console.log(`[CloudRelay] Stopped (pushed: ${totalPushed}, commands: ${totalCommands})`);
     }
@@ -427,10 +576,17 @@ const descriptor = {
         consecutiveErrors,
         pushInterval,
         commandDelivery: 'long-poll',
+        commandAuth: isValidKey(commandKey())
+          ? 'hmac-sha256'
+          : live().allowUnsigned === true
+            ? 'unsigned-allowed'
+            : 'legacy',
+        unsignedGraceUntil: new Date(graceUntil).toISOString().slice(0, 10),
+        refusedCommands,
       };
     }
 
-    const instance = { connect, disconnect, getStatus };
+    const instance = { connect, disconnect, getStatus, _pushState: pushState, _executeCommand: executeCommand };
     _currentInstance = instance;
     return instance;
   },

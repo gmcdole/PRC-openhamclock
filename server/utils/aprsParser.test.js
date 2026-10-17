@@ -76,7 +76,7 @@ describe('parseAprsPacket', () => {
   it('parses a timestamped position and rejects a malformed timestamp', () => {
     const ok = parseAprsPacket('K9XYZ-9>APRS:/092345z3858.49N/08415.25W>090/010/A=000750 ts');
     expect(ok.lat).toBeCloseTo(38.9748, 4);
-    expect(ok.comment).toBe('090/010/A=000750 ts');
+    expect(ok.comment).toBe('ts');
     expect(parseAprsPacket('K9XYZ-9>APRS:/99xx45z3858.49N/08415.25W>')).toBeNull();
   });
 
@@ -234,5 +234,40 @@ describe('pathological input stays fast (CodeQL js/polynomial-redos)', () => {
     expect(s.comment).toBe('test');
     // tokens with ordinary spacing still parse
     expect(parseAprsPacket('N8TAG-12>SXUX4Y:\`p+5l!![/[Beds   12/20] [Water OK]').tokens).toHaveLength(2);
+  });
+});
+
+describe('shelter beacons from the aprs.fi app (#1235, #1236)', () => {
+  it('strips the !DAO! precision extension from the comment', () => {
+    const p = parseAprsPacket(String.raw`KE8PLM-9>APFII0,WIDE1-1:@150953h3900.11N\08411.80WzOPEN [BEDS 12/20]!w\z!`);
+    expect(p.comment).toBe('OPEN [BEDS 12/20]');
+    expect(p.cleanComment).toBe('OPEN');
+  });
+
+  it('strips the human-readable !W12! form but leaves ordinary text alone', () => {
+    expect(parseAprsPacket('N0CALL>APRS:!3900.11N/08411.80W-Hello!W12!').comment).toBe('Hello');
+    expect(parseAprsPacket('N0CALL>APRS:!3900.11N/08411.80W-Hi!Wow!').comment).toBe('Hi!Wow!');
+  });
+
+  it('normalizes resource keys typed in any case, keeps unknown keys as sent', () => {
+    const { tokens } = parseResourceTokens('OPEN [WATER 100] [BEDS 12/20] [beds 1/2] [MRE 40]');
+    expect(tokens.map((t) => t.key)).toEqual(['Water', 'Beds', 'Beds', 'MRE']);
+  });
+});
+
+describe('position extensions leave the comment once read (#1235)', () => {
+  it('altitude and DAO come out of an aprs.fi shelter beacon; adjacent tags still parse', () => {
+    const p = parseAprsPacket(
+      String.raw`KE8PLM-3>APFII0,WIDE1-1:@165208h3900.11N\08411.80Wz/A=000921OPEN [BEDS 4/20][WATER 50]!w[z!`,
+    );
+    expect(p.altitude).toBe(921);
+    expect(p.comment).toBe('OPEN [BEDS 4/20][WATER 50]');
+    expect(p.cleanComment).toBe('OPEN');
+    expect(p.tokens.map((t) => t.key)).toEqual(['Beds', 'Water']);
+  });
+
+  it('course/speed prefix is read and removed', () => {
+    const p = parseAprsPacket('N0CALL>APRS:!3900.11N/08411.80W>090/045/A=001234 mobile');
+    expect([p.course, p.speed, p.altitude, p.comment]).toEqual([90, 45, 1234, 'mobile']);
   });
 });

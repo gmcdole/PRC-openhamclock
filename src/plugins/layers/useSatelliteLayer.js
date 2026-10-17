@@ -467,7 +467,9 @@ export const useLayer = ({ map, enabled, satellites, setSatellites, opacity, con
         replicatePath(pathCoords).forEach((coords) => {
           if (isSelected) {
             for (let i = 0; i < coords.length - 1; i++) {
-              const fade = i / coords.length;
+              // Brightens toward the future end, but never fades below 35% —
+              // a pure 0→1 ramp left the past half of the pass nearly invisible.
+              const fade = 0.35 + 0.65 * (i / coords.length);
               window.L.polyline([coords[i], coords[i + 1]], {
                 color: accentCyan,
                 weight: 6,
@@ -484,11 +486,14 @@ export const useLayer = ({ map, enabled, satellites, setSatellites, opacity, con
               }).addTo(layerGroupRef.current);
             }
           } else {
+            // Unselected tracks stay quieter than a selected one, but must
+            // still read on a busy basemap (was 1 px at 15% — users could
+            // barely find the ISS track at all).
             window.L.polyline(coords, {
               color: accentCyan,
-              weight: 1,
-              opacity: 0.15 * globalOpacity,
-              dashArray: '5, 10',
+              weight: 1.5,
+              opacity: 0.5 * globalOpacity,
+              dashArray: '5, 8',
               interactive: false,
             }).addTo(layerGroupRef.current);
           }

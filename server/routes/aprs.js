@@ -7,7 +7,7 @@ const net = require('net');
 
 const { parseAprsPacket: parseAprsPosition, parseResourceTokens } = require('../utils/aprsParser');
 const { identifyDevice } = require('../utils/aprsDeviceId');
-const { parseAprsMessage, messagesForStation } = require('../utils/aprsMessage');
+const { parseAprsMessage, messagesForStation, isDuplicateMessage } = require('../utils/aprsMessage');
 
 module.exports = function (app, ctx) {
   const { CONFIG, APP_VERSION, logDebug, logInfo, logWarn, logErrorOnce } = ctx;
@@ -250,7 +250,7 @@ module.exports = function (app, ctx) {
 
           // Try parsing as a message (addressed message or bulletin)
           const msg = parseAprsMessage(trimmed);
-          if (msg) {
+          if (msg && !isDuplicateMessage(aprsMessages, msg)) {
             aprsMessages.push(msg);
             if (aprsMessages.length > APRS_MAX_MESSAGES) aprsMessages.shift();
             if (msg.isShelterReport) {
@@ -493,6 +493,36 @@ module.exports = function (app, ctx) {
     if (!to || !message) return res.status(400).json({ error: 'Missing to or message' });
     if (message.length > 67) return res.status(400).json({ error: 'Message exceeds 67 char APRS limit' });
 
+    const recordSent = () => {
+      aprsMessages.push({
+        type: 'message',
+        from: (CONFIG.callsign || 'N0CALL').toUpperCase(),
+        to: String(to).trim().toUpperCase(),
+        text: message,
+        cleanText: message,
+        tokens: [],
+        msgId: null,
+        isShelterReport: false,
+        netCommand: null,
+        direction: 'sent',
+        source: 'local-tnc',
+        timestamp: Date.now(),
+        raw: null,
+      });
+      if (aprsMessages.length > APRS_MAX_MESSAGES) aprsMessages.shift();
+    };
+
+    // The browser already transmitted through its own Rig Bridge (#1243) —
+    // record our side of the conversation for the message history only.
+    // Not on a hosted server: there the history is shared by every visitor and
+    // this endpoint has no auth, so a record-only write would let anyone add
+    // "sent" lines (hosted browsers send through Cloud Relay, not directly).
+    if (req.body.recordOnly === true) {
+      if (TNC_STATUS_HOSTED) return res.status(403).json({ error: 'Not available on a hosted server' });
+      recordSent();
+      return res.json({ ok: true, recorded: true });
+    }
+
     // Try to send via rig-bridge APRS TNC plugin
     try {
       const rigHost = CONFIG.rigControl?.host || 'http://localhost';
@@ -505,22 +535,7 @@ module.exports = function (app, ctx) {
       if (response.ok) {
         // Keep our own side of the conversation so a station's message
         // history shows both directions (#1216). Rig-bridge only transmits.
-        aprsMessages.push({
-          type: 'message',
-          from: (CONFIG.callsign || 'N0CALL').toUpperCase(),
-          to: String(to).trim().toUpperCase(),
-          text: message,
-          cleanText: message,
-          tokens: [],
-          msgId: null,
-          isShelterReport: false,
-          netCommand: null,
-          direction: 'sent',
-          source: 'local-tnc',
-          timestamp: Date.now(),
-          raw: null,
-        });
-        if (aprsMessages.length > APRS_MAX_MESSAGES) aprsMessages.shift();
+        recordSent();
         return res.json({ ok: true, via: 'rig-bridge' });
       }
       const err = await response.text();
@@ -625,7 +640,7 @@ module.exports = function (app, ctx) {
         }
         // Try as message
         const msg = parseAprsMessage(rawLine);
-        if (msg) {
+        if (msg && !isDuplicateMessage(aprsMessages, msg)) {
           msg.source = 'local-tnc';
           aprsMessages.push(msg);
           if (aprsMessages.length > APRS_MAX_MESSAGES) aprsMessages.shift();

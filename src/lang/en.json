@@ -957,6 +957,7 @@
   "station.settings.rigBridge.readme.body": "Rig Bridge requires local software and careful configuration. Review the full setup guide before enabling:",
   "station.settings.rigBridge.readme.heading": "Read the README before setting up",
   "station.settings.rigBridge.readme.link": "rig-bridge README on GitHub",
+  "station.settings.rigBridge.relayUnsigned": "This browser has no relay command key, so Rig Bridge will refuse its PTT and transmit commands (and tuning after 31 January 2027). Disconnect and connect the Cloud Relay again, then paste the new settings into Rig Bridge.",
   "station.settings.rigControl.apiToken": "API Token",
   "station.settings.rigControl.apiToken.hint": "Required when rig-bridge has authentication enabled (new installs). Find it at http://localhost:5555.",
   "station.settings.rigControl.apiToken.placeholder": "Paste token from rig-bridge setup UI",

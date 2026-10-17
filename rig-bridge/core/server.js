@@ -1035,6 +1035,8 @@ function buildSetupHtml(version, firstRunToken = null) {
         { id: 'session', label: 'Session ID', type: 'text', default: '' },
         { id: 'pushInterval', label: 'Push Interval (ms)', type: 'number', default: 2000 },
         { id: 'pollInterval', label: 'Poll Interval (ms)', type: 'number', default: 1000 },
+        { id: 'commandKey', label: 'Command Key (from Connect Cloud Relay)', type: 'text', default: '' },
+        { id: 'allowUnsigned', label: 'Accept unsigned commands (unsafe)', type: 'checkbox', default: false },
       ]},
       { key: 'meshcom', name: 'MeshCom UDP', maturity: 'beta', desc: 'Receive MeshCom LoRa mesh node positions, messages and telemetry via UDP JSON (port 1799)', fields: [
         { id: 'bindPort', label: 'UDP Listen Port', type: 'number', default: 1799 },

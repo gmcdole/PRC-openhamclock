@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useVisibilityRefresh } from './useVisibilityRefresh';
 import { apiFetch } from '../utils/apiFetch';
 import { getRelaySessionId } from '../utils/relaySession';
+import { relayReadHeaders } from '../utils/relaySign';
 
 const POLL_FAST = 2000; // 2s when data is flowing
 const POLL_SLOW = 30000; // 30s idle check — is anything connected?
@@ -59,7 +60,8 @@ export function useWSJTX(enabled = true) {
       const base = lastTimestamp.current ? `${DECODES_URL}?since=${lastTimestamp.current}` : DECODES_URL;
       const sep = base.includes('?') ? '&' : '?';
       const url = `${base}${sep}session=${sessionId}`;
-      const res = await apiFetch(url);
+      // Relay read token when this browser holds the Cloud Relay key ({} otherwise)
+      const res = await apiFetch(url, { headers: await relayReadHeaders(sessionId) });
       if (!res) return; // backed off globally
       if (res.status === 429) {
         // Back off for 30 seconds on rate limit
@@ -104,7 +106,7 @@ export function useWSJTX(enabled = true) {
     // Skip if we're in a rate-limit backoff window
     if (Date.now() < backoffUntil.current) return;
     try {
-      const res = await apiFetch(`${API_URL}?session=${sessionId}`);
+      const res = await apiFetch(`${API_URL}?session=${sessionId}`, { headers: await relayReadHeaders(sessionId) });
       if (!res) return; // backed off globally
       if (res.status === 429) {
         backoffUntil.current = Date.now() + 30000;

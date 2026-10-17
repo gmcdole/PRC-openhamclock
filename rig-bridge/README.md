@@ -421,6 +421,13 @@ The openhamclock.com website uses a secure connection (HTTPS), and browsers will
 2. Host: `https://localhost` — Port: `5555`
 3. Paste your API Token
 4. Click **Connect Cloud Relay**
+5. In the Rig Bridge setup page (Plugins → **Cloud Relay**), enter the **OHC Server URL**, **Relay API Key**, **Session ID** and **Command Key** shown by OpenHamClock (they are also on your clipboard), and save.
+
+The **Command Key** is made by your browser and goes only to Rig Bridge — the OpenHamClock server never sees it. Every tune, PTT or transmit command from that browser is signed with it, and Rig Bridge refuses commands without a valid signature, so neither the server nor anyone who learns your session id can operate your radio. Each command can be used once and only within five minutes, so a captured command cannot be replayed. Using another browser? Press **Connect Cloud Relay** there and paste the new settings; the old browser then stops working.
+
+The same key also protects **reading** the relay — your rig state, decodes, APRS and the live stream. Rig Bridge derives a separate read token from it and gives the server only that token's hash; your browser derives the same token and presents it, so knowing the session id is no longer enough to watch your station. The live stream opens with a one-time ticket, so no secret ever appears in a URL. A relay paired before command keys existed can still be read with the session id alone until **31 January 2027** (the server logs a reminder), then reads are refused until you reconnect it.
+
+**Paired before command keys existed?** Rig Bridge keeps accepting unsigned **tuning** (frequency and mode) from such a pairing until **31 January 2027** (`unsignedGraceUntil` in the `cloudRelay` settings) and logs a reminder; it never accepts unsigned **PTT** or anything that transmits. To fix it, press **Disconnect Cloud Relay** and then **Connect Cloud Relay** in OpenHamClock Settings and paste the new settings into Rig Bridge. `"allowUnsigned": true` restores the old behaviour of accepting every command unsigned; it is unsafe and only meant for a bridge you cannot re-pair yet.
 
 How it works behind the scenes:
 
@@ -758,6 +765,18 @@ See [Scenario 3](#scenario-3-cloud-relay-ohc-on-openhamclockcom-radio-at-home) f
 | Browser command → rig | Long-poll (server wakes rig-bridge on command arrival) | ~RTT (< 100 ms) |
 
 The rig-bridge holds a persistent long-poll connection to the server. The moment you click PTT or a DX spot, the server wakes that connection and delivers the command — no fixed poll tick to wait for.
+
+**Commands are signed end to end.** The browser that pressed Connect Cloud Relay and this Rig Bridge share a command key the server never sees; each command carries an HMAC-SHA256 signature with a timestamp and a one-time nonce, checked by Rig Bridge before anything happens (see [Scenario C](#scenario-c--using-the-cloud-version-at-openhamclockcom-cloud-relay-alpha)). Once Rig Bridge reports that it holds a key, the server also refuses unsigned commands for that session straight away.
+
+| Setting              | Meaning                                                                                    | Default        |
+| -------------------- | ------------------------------------------------------------------------------------------ | -------------- |
+| `commandKey`         | 64-hex key from Connect Cloud Relay; when set, only signed commands run                    | `""`           |
+| `unsignedGraceUntil` | Without a key, unsigned tuning (frequency, mode) is accepted until this date; never PTT/TX | `"2027-01-31"` |
+| `allowUnsigned`      | Accept every command unsigned, PTT included (old behaviour; unsafe)                        | `false`        |
+
+`GET /api/cloud-relay/status` shows `commandAuth` (`hmac-sha256`, `legacy` or `unsigned-allowed`) and how many commands were refused.
+
+Reads are protected too: Rig Bridge registers the hash of a read token derived from the command key (HKDF, separate label), and the server then requires that token for `/relay/state`, `/relay/decodes` and `/relay/aprs` (`X-Relay-Read` header) and a one-time ticket from `POST /relay/stream-ticket` for the live stream. The same rule covers the session's MeshCom data (`/api/meshcom/nodes`, `messages`, `weather`, `status`) and WSJT-X relay data (`/api/wsjtx`, `/api/wsjtx/decodes`) when they are read with `?session=`. The server keeps only the hash, persisted with the session. Self-hosters can move the grace date for unpaired sessions with `RELAY_UNSIGNED_GRACE_UNTIL` in `.env`.
 
 **Config reference:**
 

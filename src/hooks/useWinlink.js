@@ -22,7 +22,12 @@ export function useWinlink() {
   const fetchStatus = useCallback(async () => {
     try {
       const res = await apiFetch('/api/winlink/status');
-      if (!res || !res.ok) return;
+      if (!res || !res.ok) {
+        // No status endpoint (404/5xx) or rate-limited: stop "loading" so the
+        // panel shows its not-enabled state instead of "Loading..." forever.
+        if (mountedRef.current) setLoading(false);
+        return;
+      }
       const data = await res.json();
       if (mountedRef.current) {
         setStatus(data);

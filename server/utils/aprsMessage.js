@@ -128,4 +128,35 @@ function messagesForStation(messages, call, limit = 200) {
     }));
 }
 
-module.exports = { parseAprsMessage, messagesForStation };
+/**
+ * Is `msg` a retransmission of one already logged (#1230)? Senders retry an
+ * un-acked message several times (aprs.fi ×6, Yaesu FTM-500 ×6), and a
+ * message addressed to an alias such as EMCOMM is never acked — so without
+ * this every message landed in the log, and re-ran its net command, up to six
+ * times. The same packet heard over both RF and APRS-IS is caught too.
+ * Same sender + addressee + message id within 30 min; messages with no id
+ * fall back to identical text within 5 min.
+ */
+const DUP_WINDOW_ID_MS = 30 * 60 * 1000;
+const DUP_WINDOW_TEXT_MS = 5 * 60 * 1000;
+function isDuplicateMessage(messages, msg) {
+  if (!msg || !Array.isArray(messages)) return false;
+  const up = (c) =>
+    String(c || '')
+      .trim()
+      .toUpperCase();
+  const from = up(msg.from);
+  const to = up(msg.to);
+  const now = msg.timestamp || Date.now();
+  const window = msg.msgId ? DUP_WINDOW_ID_MS : DUP_WINDOW_TEXT_MS;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    if (now - (m.timestamp || 0) > window) break; // log is append-only, so older entries are out of window too
+    if (m.direction === 'sent' || up(m.from) !== from || up(m.to) !== to) continue;
+    if (msg.msgId ? m.msgId === msg.msgId : !m.msgId && m.text === msg.text) return true;
+  }
+  return false;
+}
+
+module.exports = { parseAprsMessage, messagesForStation, isDuplicateMessage };

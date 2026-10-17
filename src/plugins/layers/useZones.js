@@ -138,19 +138,25 @@ export function useLayer({ enabled = false, opacity = 0.7, map = null }) {
               opacity: opacity * 0.9,
               fill: true,
               fillColor: color,
-              fillOpacity: 0.02, // near-invisible fill so polygons stay clickable
+              fillOpacity: 0.02, // near-invisible fill so polygons stay hoverable
               interactive: true,
             },
           });
 
-          layer.bindPopup(`
-            <div style="font-family: var(--font-mono); font-size: 12px; min-width: 160px;">
-              <div style="font-weight: bold; color: var(--accent-cyan); margin-bottom: 4px;">
+          // Hover tooltip, not a click popup: Leaflet's popup-open handler
+          // stops the click event, so with a popup bound every map click
+          // inside a zone (i.e. everywhere) was swallowed and the DX marker
+          // could not be moved while this layer was on. Tooltips leave the
+          // click to bubble through to the map's set-DX handler.
+          layer.bindTooltip(
+            `<div style="font-family: var(--font-mono); font-size: 12px;">
+              <div style="font-weight: bold; color: var(--accent-cyan);">
                 🌐 ${zoneType === 'cq' ? 'CQ' : 'ITU'} Zone ${esc(String(zoneNumber ?? '?'))}
               </div>
               ${zoneName ? `<div style="font-size: 11px;">${esc(zoneName)}</div>` : ''}
-            </div>
-          `);
+            </div>`,
+            { sticky: true, direction: 'top', offset: [0, -8], opacity: 0.95 },
+          );
           layer.addTo(map);
           newLayers.push(layer);
         } catch {

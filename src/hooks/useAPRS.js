@@ -123,10 +123,16 @@ export const useAPRS = (options = {}) => {
       const res = await apiFetch('/api/aprs/tnc-status', { cache: 'no-store' });
       if (res?.ok) {
         const data = await res.json();
+        // The server can only probe a bridge on its own localhost:5555. When
+        // this browser's bridge stream already reported a TNC, a "not
+        // connected" from that probe means it looked in the wrong place
+        // (#1243) — keep the stream's answer.
+        if (!data.connected && tncDetectedViaSse.current) return;
         tncConnectedRef.current = data.connected ?? false;
         setTncConnected(data.connected ?? false);
       }
     } catch {
+      if (tncDetectedViaSse.current) return;
       tncConnectedRef.current = false;
       setTncConnected(false);
     }

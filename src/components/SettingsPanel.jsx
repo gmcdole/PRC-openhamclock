@@ -46,6 +46,7 @@ import {
   sendTestPush,
 } from '../utils/push';
 import { setRelaySessionId, setRelayConfigured, clearRelaySession } from '../utils/relaySession';
+import { generateCommandKey, getCommandKey, setCommandKey } from '../utils/relaySign';
 import { getCallbookCredentials, setCallbookCredentials } from '../utils/callbookAuth.js';
 import { getCartoApiKey, CARTO_KEY_STORAGE } from '../utils/config.js';
 import { listPresets } from '../store/layoutStore.js';
@@ -6900,6 +6901,22 @@ export const SettingsPanel = ({
                             {cloudRelaySession.slice(0, 8)}&hellip;
                           </span>
                         </div>
+                        {!getCommandKey() && (
+                          <div
+                            role="alert"
+                            style={{
+                              fontSize: '11px',
+                              color: 'var(--accent-amber)',
+                              marginBottom: '10px',
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {t('station.settings.rigBridge.relayUnsigned', {
+                              defaultValue:
+                                'This browser has no relay command key, so Rig Bridge will refuse its PTT and transmit commands (and tuning after 31 January 2027). Disconnect and connect the Cloud Relay again, then paste the new settings into Rig Bridge.',
+                            })}
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -6914,6 +6931,7 @@ export const SettingsPanel = ({
                             setCloudRelaySession('');
                             // Clear session and configured flag from localStorage
                             clearRelaySession();
+                            setCommandKey('');
                             onSave({
                               ...config,
                               rigControl: {
@@ -6972,6 +6990,17 @@ export const SettingsPanel = ({
                                 return;
                               }
 
+                              // Command key: made here and shared only with Rig Bridge
+                              // (via the pasted settings) — the server never sees it,
+                              // so neither the server nor anyone who learns the
+                              // session id can sign commands for this radio.
+                              const commandKey = generateCommandKey();
+                              setCommandKey(commandKey);
+                              const configPayload = {
+                                ...credData.configPayload,
+                                cloudRelay: { ...(credData.configPayload?.cloudRelay || {}), commandKey },
+                              };
+
                               setCloudRelaySession(credData.session);
                               // Persist in localStorage so all relay-consuming hooks
                               // (WSJTX, MeshCom, APRS) immediately poll with this ID
@@ -6982,7 +7011,7 @@ export const SettingsPanel = ({
                               setRelayConfigured(true);
 
                               // Copy config to clipboard for easy paste into rig-bridge
-                              const configText = JSON.stringify(credData.configPayload, null, 2);
+                              const configText = JSON.stringify(configPayload, null, 2);
                               try {
                                 await navigator.clipboard.writeText(configText);
                               } catch (e) {}
@@ -6999,6 +7028,9 @@ export const SettingsPanel = ({
                                   `   Server URL: ${credData.serverUrl}\n` +
                                   `   API Key: ${credData.relayKey}\n` +
                                   `   Session: ${credData.session}\n` +
+                                  `   Command key: ${commandKey}\n` +
+                                  `   (the command key stays between this browser and Rig Bridge —\n` +
+                                  `    it is not sent to the server)\n` +
                                   `5. Restart rig-bridge\n` +
                                   `6. Click Save below in OHC settings\n\n` +
                                   `(Config copied to clipboard)`,

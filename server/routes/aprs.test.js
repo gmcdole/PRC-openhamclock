@@ -99,3 +99,38 @@ describe('APRS telemetry', () => {
     expect(res.payload).toEqual({ error: 'No telemetry for this callsign' });
   });
 });
+
+describe('POST /api/aprs/message recordOnly (#1243)', () => {
+  it('records a message the browser already transmitted, without contacting rig-bridge', () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    const noop = () => {};
+    const fetch = vi.fn();
+    mountAprs(app, {
+      CONFIG: { callsign: 'k0cjh' },
+      APP_VERSION: 'test',
+      logDebug: noop,
+      logInfo: noop,
+      logWarn: noop,
+      logErrorOnce: noop,
+      fetch,
+    });
+    let out;
+    app.routes['POST /api/aprs/message'](
+      { body: { to: 'n8tag', message: 'hi', recordOnly: true } },
+      {
+        status() {
+          return this;
+        },
+        json(d) {
+          out = d;
+        },
+      },
+    );
+    expect(out).toEqual({ ok: true, recorded: true });
+    expect(fetch).not.toHaveBeenCalled();
+    const hist = call(app.routes['GET /api/aprs/messages/history'], { query: { call: 'N8TAG' } }).payload;
+    expect(hist.messages[0]).toMatchObject({ from: 'K0CJH', to: 'N8TAG', text: 'hi', direction: 'sent' });
+    vi.useRealTimers();
+  });
+});

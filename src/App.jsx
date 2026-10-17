@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { firstVisitPlan } from './utils/firstVisit.js';
 
 import { SettingsPanel, DXFilterManager, PSKFilterManager, KeybindingsPanel } from './components';
 import SidebarMenu from './components/SidebarMenu.jsx';
@@ -126,25 +127,26 @@ const App = () => {
     return () => window.removeEventListener(HELP_EVENT, onOpenHelp);
   }, []);
 
+  // First visit: open Settings and pick a layout for touch devices. "First
+  // visit" means no saved layout yet, not a missing key: the theme module
+  // writes a theme-only openhamclock_config before this runs
+  // (utils/firstVisit.js).
   useEffect(() => {
     if (!configLoaded) return;
-    const hasLocalStorage = localStorage.getItem('openhamclock_config');
-    if (!hasLocalStorage && config.callsign === 'N0CALL') {
-      setShowSettings(true);
-
-      // Auto-detect mobile/tablet on first visit and set appropriate layout
-      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      const isSmallScreen = window.innerWidth <= 768;
-      const isTabletSize = window.innerWidth > 768 && window.innerWidth <= 1200;
-
-      if (isTouchDevice && isSmallScreen) {
-        // Phone → compact layout
-        handleSaveConfig({ ...config, layout: 'compact' });
-      } else if (isTouchDevice && isTabletSize) {
-        // Tablet → tablet layout
-        handleSaveConfig({ ...config, layout: 'tablet' });
-      }
+    let raw = null;
+    try {
+      raw = localStorage.getItem('openhamclock_config');
+    } catch {
+      /* private mode */
     }
+    const plan = firstVisitPlan({
+      savedConfigRaw: raw,
+      callsign: config.callsign,
+      width: window.innerWidth,
+      isTouch: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
+    });
+    if (plan.openSettings) setShowSettings(true);
+    if (plan.layout) handleSaveConfig({ ...config, layout: plan.layout });
   }, [configLoaded, config.callsign]);
 
   // ── Keyboard shortcuts for map layer toggling ──

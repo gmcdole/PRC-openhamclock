@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAprsMessage, messagesForStation } from './aprsMessage.js';
+import { parseAprsMessage, messagesForStation, isDuplicateMessage } from './aprsMessage.js';
 
 const line = (body) => `N8TAG-7>APY5D1,WIDE1-1:${body}`;
 
@@ -108,5 +108,32 @@ describe('messagesForStation', () => {
     expect(messagesForStation(msgs, 'N0XYZ')).toEqual([]);
     expect(messagesForStation(msgs, '')).toEqual([]);
     expect(messagesForStation(msgs, 'KE8PLM', 1)).toHaveLength(1);
+  });
+});
+
+describe('isDuplicateMessage (#1230)', () => {
+  const t0 = 1_700_000_000_000;
+  const base = { from: 'KE8PLM-9', to: 'EMCOMM', text: 'CQ OHNET', msgId: '12', timestamp: t0 };
+
+  it('catches a retransmission with the same sender, addressee and id', () => {
+    expect(isDuplicateMessage([base], { ...base, timestamp: t0 + 60_000 })).toBe(true);
+    expect(isDuplicateMessage([base], { ...base, from: 'ke8plm-9', timestamp: t0 + 60_000 })).toBe(true);
+  });
+
+  it('keeps a new id, another sender, or an old id outside the window', () => {
+    expect(isDuplicateMessage([base], { ...base, msgId: '13', timestamp: t0 + 60_000 })).toBe(false);
+    expect(isDuplicateMessage([base], { ...base, from: 'W8ROC', timestamp: t0 + 60_000 })).toBe(false);
+    expect(isDuplicateMessage([base], { ...base, timestamp: t0 + 31 * 60_000 })).toBe(false);
+  });
+
+  it('falls back to identical text for id-less messages, within 5 min', () => {
+    const noId = { ...base, msgId: null };
+    expect(isDuplicateMessage([noId], { ...noId, timestamp: t0 + 60_000 })).toBe(true);
+    expect(isDuplicateMessage([noId], { ...noId, text: 'U OHNET', timestamp: t0 + 60_000 })).toBe(false);
+    expect(isDuplicateMessage([noId], { ...noId, timestamp: t0 + 6 * 60_000 })).toBe(false);
+  });
+
+  it('ignores our own sent messages', () => {
+    expect(isDuplicateMessage([{ ...base, direction: 'sent' }], { ...base, timestamp: t0 + 1 })).toBe(false);
   });
 });

@@ -36,6 +36,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../utils/apiFetch';
 import { getRelaySessionId } from '../utils/relaySession';
+import { relayReadHeaders } from '../utils/relaySign';
 
 const POLL_INTERVAL = 30_000; // 30 s — LoRa beacon rate is much slower than APRS
 const FETCH_TIMEOUT_MS = 5_000; // hard cap per request — never tie up a connection longer
@@ -72,7 +73,8 @@ export function useMeshCom(options = {}) {
   const fetchNodes = useCallback(async () => {
     if (!enabled) return;
     try {
-      const headers = {};
+      // Relay read token when this browser holds the Cloud Relay key ({} otherwise)
+      const headers = { ...(await relayReadHeaders(sessionId)) };
       if (nodeEtagRef.current) headers['If-None-Match'] = nodeEtagRef.current;
 
       const res = await apiFetch(`/api/meshcom/nodes?session=${sessionId}`, {
@@ -108,6 +110,7 @@ export function useMeshCom(options = {}) {
       const url = since > 0 ? `${base}&since=${since}` : base;
       const res = await apiFetch(url, {
         cache: 'no-store',
+        headers: await relayReadHeaders(sessionId),
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (res?.ok) {
@@ -144,6 +147,7 @@ export function useMeshCom(options = {}) {
     try {
       const res = await apiFetch(`/api/meshcom/status?session=${sessionId}`, {
         cache: 'no-store',
+        headers: await relayReadHeaders(sessionId),
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (res?.ok) {

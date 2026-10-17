@@ -184,6 +184,11 @@ const DEFAULT_CONFIG = {
     pushInterval: 2000, // State push interval in ms
     pollInterval: 1000, // Command poll interval in ms
     verbose: false,
+    // Key shared with the browser that pressed Connect Cloud Relay; commands
+    // must be signed with it (lib/relay-sign.js). Never sent to the server.
+    commandKey: '',
+    allowUnsigned: false, // true = accept unsigned commands of every kind (old, unsafe behaviour)
+    unsignedGraceUntil: '2027-01-31', // without a key: unsigned tuning accepted until this date, never PTT/TX
   },
   // Winlink gateway discovery + Pat client integration
   winlink: {

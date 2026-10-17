@@ -25,6 +25,10 @@
 module.exports = function (app, ctx) {
   const { logDebug, logInfo, logWarn, CONFIG } = ctx;
 
+  // Session data relayed by a paired Rig Bridge needs the relay read token,
+  // exactly like the rig-bridge relay reads (server/routes/rig-bridge.js).
+  const relayReadGuard = (req, res, next) => (ctx.relayRead ? ctx.relayRead.require(req, res, next) : next());
+
   // Validate env-var integer fields — parseInt('xyz') returns NaN, which makes
   // all expiry comparisons false → nodes/sessions never expire → memory leak.
   function parseEnvMinutes(envName, defaultMinutes) {
@@ -241,7 +245,7 @@ module.exports = function (app, ctx) {
 
   // ── GET /api/meshcom/nodes ──────────────────────────────────────────────────
   // Requires ?session=<id>. Supports ?since=<ms> and ETag / If-None-Match.
-  app.get('/api/meshcom/nodes', (req, res) => {
+  app.get('/api/meshcom/nodes', relayReadGuard, (req, res) => {
     const s = getSessionIfExists(req.query.session);
     if (!s) return res.json({ count: 0, nodes: [] });
 
@@ -268,7 +272,7 @@ module.exports = function (app, ctx) {
 
   // ── GET /api/meshcom/messages ───────────────────────────────────────────────
   // Requires ?session=<id>. Supports ?since=<ms>.
-  app.get('/api/meshcom/messages', (req, res) => {
+  app.get('/api/meshcom/messages', relayReadGuard, (req, res) => {
     const s = getSessionIfExists(req.query.session);
     if (!s) return res.json({ count: 0, messages: [] });
 
@@ -280,7 +284,7 @@ module.exports = function (app, ctx) {
 
   // ── GET /api/meshcom/weather ────────────────────────────────────────────────
   // Requires ?session=<id>.
-  app.get('/api/meshcom/weather', (req, res) => {
+  app.get('/api/meshcom/weather', relayReadGuard, (req, res) => {
     const s = getSessionIfExists(req.query.session);
     if (!s) return res.json({ count: 0, weather: [] });
 
@@ -291,7 +295,7 @@ module.exports = function (app, ctx) {
   // ── GET /api/meshcom/status ─────────────────────────────────────────────────
   // Purely synchronous — no outbound HTTP calls. Derives rig-bridge
   // connectivity from this session's lastIngestTime.
-  app.get('/api/meshcom/status', (req, res) => {
+  app.get('/api/meshcom/status', relayReadGuard, (req, res) => {
     const s = getSessionIfExists(req.query.session);
     if (!s) {
       return res.json({

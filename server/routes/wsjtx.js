@@ -994,8 +994,12 @@ module.exports = function (app, ctx) {
     }
   }
 
+  // Session data relayed by a paired Rig Bridge needs the relay read token,
+  // like the rig-bridge relay reads; local (session-less) data is unaffected.
+  const relayReadGuard = (req, res, next) => (ctx.relayRead ? ctx.relayRead.require(req, res, next) : next());
+
   // API endpoint: get WSJT-X data
-  app.get('/api/wsjtx', (req, res) => {
+  app.get('/api/wsjtx', relayReadGuard, (req, res) => {
     const sessionId = req.query.session || '';
 
     // Use session-specific state for relay mode, or global state for local UDP
@@ -1040,7 +1044,7 @@ module.exports = function (app, ctx) {
   });
 
   // API endpoint: get just decodes (lightweight polling)
-  app.get('/api/wsjtx/decodes', (req, res) => {
+  app.get('/api/wsjtx/decodes', relayReadGuard, (req, res) => {
     const sessionId = req.query.session || '';
     const state = sessionId && WSJTX_RELAY_KEY ? wsjtxRelaySessions[sessionId] || { decodes: [] } : wsjtxState;
 

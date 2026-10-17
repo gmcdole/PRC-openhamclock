@@ -189,6 +189,40 @@ function parseMice(destination, info) {
  * Resource tokens in the comment (EmComm bracket notation):
  * "[Beds 12/20] [Water OK]" → tokens array + comment with the tokens removed.
  */
+// Known resource keys in their display spelling. Senders type them in any
+// case ("[BEDS 12/20]" from the aprs.fi app), and the UI and shelter logic
+// match on this spelling — so normalize on the way in (#1236).
+const RESOURCE_KEYS = [
+  'Beds',
+  'Capacity',
+  'Water',
+  'Food',
+  'Power',
+  'Fuel',
+  'Med',
+  'Staff',
+  'Evac',
+  'Evacuees',
+  'Comms',
+  'Gen',
+  'Shelter',
+];
+const RESOURCE_KEY_BY_LOWER = new Map(RESOURCE_KEYS.map((k) => [k.toLowerCase(), k]));
+function canonicalResourceKey(key) {
+  return RESOURCE_KEY_BY_LOWER.get(key.toLowerCase()) || key;
+}
+
+/**
+ * APRS 1.2 !DAO! datum/precision extension: "!" + datum letter + two chars +
+ * "!" (e.g. "!w\z!" from the aprs.fi iPhone app). It is position data, not
+ * text — left in, it showed up glued to shelter reports (#1235).
+ */
+function stripDao(comment) {
+  // Uppercase datum: human-readable extra digits ("!W12!"). Lowercase datum:
+  // base-91 extra precision ("!w\z!"). Anything else is ordinary text.
+  return comment.replace(/![A-Z][0-9 ]{2}!|![a-z][\x21-\x7b]{2}!/g, '').trim();
+}
+
 function parseResourceTokens(comment) {
   if (!comment) return { tokens: [], cleanComment: '' };
   const tokens = [];
@@ -213,7 +247,7 @@ function parseResourceTokens(comment) {
       i++;
       continue;
     }
-    const key = comment.slice(i + 1, j);
+    const key = canonicalResourceKey(comment.slice(i + 1, j));
     while (j < n && isSpace(comment.charCodeAt(j))) j++;
     if (j >= n || comment.charCodeAt(j) === 93 /* ] */) {
       i++;
@@ -329,23 +363,28 @@ function parseAprsPacket(line) {
     const { lat, lon, symbolTable, symbolCode } = parsed;
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
 
-    const comment = parsed.comment || '';
+    let comment = stripDao(parsed.comment || '');
     let speed = parsed.speed ?? null;
     let course = parsed.course ?? null;
     let altitude = parsed.altitude ?? null;
 
-    // Uncompressed extensions in the comment: CSE/SPD and /A=FFFFFF (feet)
+    // Uncompressed extensions in the comment: CSE/SPD and /A=FFFFFF (feet).
+    // Both are position data, so they come out of the comment once read —
+    // left in, a shelter beacon displayed as "/A=000921OPEN" (#1235).
     if (speed == null) {
       const csMatch = comment.match(/^(\d{3})\/(\d{3})/);
       if (csMatch && Number(csMatch[1]) <= 360) {
         course = parseInt(csMatch[1]);
         speed = parseInt(csMatch[2]); // knots
+        comment = comment.slice(csMatch[0].length);
       }
     }
-    if (altitude == null) {
-      const altMatch = comment.match(/\/A=(-\d{5}|\d{6})/);
-      if (altMatch) altitude = parseInt(altMatch[1]); // feet
+    const altMatch = comment.match(/\/A=(-\d{5}|\d{6})/);
+    if (altMatch) {
+      if (altitude == null) altitude = parseInt(altMatch[1]); // feet
+      comment = comment.replace(altMatch[0], '');
     }
+    comment = comment.trim();
 
     const { tokens, cleanComment } = parseResourceTokens(comment);
     // Objects and items are things a station reports (a repeater, a shelter,
@@ -380,4 +419,4 @@ function parseAprsPacket(line) {
   }
 }
 
-module.exports = { parseAprsPacket, parseMice, parsePositionBody, parseResourceTokens, MICE_TYPES };
+module.exports = { parseAprsPacket, parseMice, parsePositionBody, parseResourceTokens, stripDao, MICE_TYPES };

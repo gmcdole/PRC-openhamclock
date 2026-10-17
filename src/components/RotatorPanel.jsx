@@ -20,14 +20,11 @@ export default function RotatorPanel({
   onStop,
   controlsEnabled = true,
 }) {
-  const {
-    azimuth,
-    lastGoodAzimuth,
-    isStale,
-    status = 'disconnected',
-    lastError = null,
-    reconnect,
-  } = state ?? useRotator({ endpointUrl, pollMs, staleMs });
+  // Hooks must run on every render in the same order, so useRotator is always
+  // called. When the parent owns the rotator state we pass no endpointUrl, which
+  // keeps the hook idle (no polling) and we read from `state` instead.
+  const ownState = useRotator({ endpointUrl: state ? undefined : endpointUrl, pollMs, staleMs });
+  const { azimuth, lastGoodAzimuth, isStale, status = 'disconnected', lastError = null, reconnect } = state ?? ownState;
 
   const displayAngleRef = useRef(null); // continuous angle
   const prevAzRef = useRef(null);

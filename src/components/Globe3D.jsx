@@ -147,15 +147,17 @@ const bandFromAnyFrequency = (freq) => {
 };
 
 // ── Round sprite for spot markers ──────────────────────────
+// 256 px with a narrow edge falloff: at 64 px with a soft ramp, zooming in
+// magnified the texture and the dots went visibly blurry (#1234).
 function makeDotTexture() {
-  const size = 64;
+  const size = 256;
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const ctx = c.getContext('2d');
   const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
   g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.55, 'rgba(255,255,255,1)');
-  g.addColorStop(0.72, 'rgba(255,255,255,0.85)');
+  g.addColorStop(0.82, 'rgba(255,255,255,1)');
+  g.addColorStop(0.92, 'rgba(255,255,255,0.85)');
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.beginPath();
@@ -163,6 +165,7 @@ function makeDotTexture() {
   ctx.fill();
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
   return tex;
 }
 
