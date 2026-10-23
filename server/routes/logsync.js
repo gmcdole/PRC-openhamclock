@@ -27,6 +27,7 @@
  *                              query: since=YYYY-MM-DD | test=1
  */
 
+const https = require('https');
 const { validateCustomHost } = require('../utils/ssrf');
 
 const QRZ_API_URL = 'https://logbook.qrz.com/api';
@@ -39,6 +40,10 @@ const LOTW_TIMEOUT_MS = 90000; // LoTW is notoriously slow — give it room
 module.exports = function (app, ctx) {
   const { fetch, APP_VERSION, writeLimiter, logInfo, logWarn, logErrorOnce } = ctx;
   const userAgent = `OpenHamClock/${APP_VERSION} (+https://github.com/accius/openhamclock)`;
+  // On the multi-user hosted site a Wavelog URL must be a public server: the
+  // routes are open to everyone, so a LAN/loopback target would let any caller
+  // make this server probe its own network.
+  const IS_HOSTED = process.env.OHC_HOSTED === '1' || process.env.OHC_HOSTED === 'true';
 
   const fetchWithTimeout = async (url, options = {}, timeoutMs = PUSH_TIMEOUT_MS) => {
     const controller = new AbortController();
@@ -58,11 +63,11 @@ module.exports = function (app, ctx) {
    * Normalize + SSRF-check a user-supplied Wavelog base URL.
    * Returns { ok, base, host } or { ok:false, reason }.
    *
-   * For https:// targets we validate DNS resolution but connect by hostname:
-   * TLS certificate verification pins the connection to the named host, which
-   * closes the DNS-rebinding window the resolved-IP trick exists for. Plain
-   * http:// targets (typical for LAN Wavelog installs) connect to the
-   * validated IP with a Host header, same as rig-bridge status checks.
+   * Plain http:// targets (typical for LAN Wavelog installs) connect to the
+   * validated IP with a Host header, same as rig-bridge status checks. https://
+   * targets keep the hostname for SNI and certificate checks, but an agent pins
+   * the socket to the validated IP, so DNS can't be rebound between the check
+   * and the connection. Redirects are not followed (they would bypass both).
    */
   const resolveWavelogBase = async (rawUrl) => {
     let parsed;
@@ -74,7 +79,7 @@ module.exports = function (app, ctx) {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { ok: false, reason: 'Wavelog URL must be http(s)' };
     }
-    const validation = await validateCustomHost(parsed.hostname);
+    const validation = await validateCustomHost(parsed.hostname, { allowPrivate: !IS_HOSTED });
     if (!validation.ok) return { ok: false, reason: `Wavelog host rejected: ${validation.reason}` };
 
     // Strip trailing slash and a trailing /index.php — re-appended uniformly.
@@ -83,7 +88,15 @@ module.exports = function (app, ctx) {
     const connectHost = parsed.protocol === 'https:' ? parsed.hostname : validation.resolvedIP;
     const portPart = parsed.port ? `:${parsed.port}` : '';
     const base = `${parsed.protocol}//${connectHost}${portPart}${path}/index.php`;
-    return { ok: true, base, host };
+    const pinned = validation.resolvedIP;
+    const agent =
+      parsed.protocol === 'https:'
+        ? new https.Agent({
+            lookup: (hostname, opts, cb) =>
+              opts && opts.all ? cb(null, [{ address: pinned, family: 4 }]) : cb(null, pinned, 4),
+          })
+        : undefined;
+    return { ok: true, base, host, agent };
   };
 
   app.post('/api/logsync/wavelog', writeLimiter, async (req, res) => {
@@ -114,6 +127,8 @@ module.exports = function (app, ctx) {
       };
       const upstream = await fetchWithTimeout(endpoint, {
         method: test ? 'GET' : 'POST',
+        redirect: 'manual',
+        agent: target.agent,
         headers: {
           Accept: 'application/json',
           'User-Agent': userAgent,
@@ -122,6 +137,10 @@ module.exports = function (app, ctx) {
         },
         ...(!test ? { body: JSON.stringify(body) } : {}),
       });
+      if (upstream.status >= 300 && upstream.status < 400) {
+        const location = upstream.headers.get('location') || 'another address';
+        return res.status(502).json({ error: `Wavelog redirected to ${location} — enter that URL instead` });
+      }
       const text = await upstream.text();
       let data = null;
       try {
@@ -195,6 +214,8 @@ module.exports = function (app, ctx) {
         `${target.base}/api/get_contacts_adif`,
         {
           method: 'POST',
+          redirect: 'manual',
+          agent: target.agent,
           headers: {
             'Content-Type': 'application/json',
             Accept: 'application/json',
@@ -212,6 +233,10 @@ module.exports = function (app, ctx) {
         WAVELOG_PULL_TIMEOUT_MS,
       );
 
+      if (upstream.status >= 300 && upstream.status < 400) {
+        const location = upstream.headers.get('location') || 'another address';
+        return res.status(502).json({ error: `Wavelog redirected to ${location} — enter that URL instead` });
+      }
       const text = await upstream.text();
       let data = null;
       try {

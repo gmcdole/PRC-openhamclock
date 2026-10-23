@@ -64,7 +64,7 @@ async function pairedSession(id, commandAuth) {
   await call('POST', '/api/rig-bridge/relay/state', { headers, body: { session: id, freq: 7074000, commandAuth } });
   const send = (body) => call('POST', '/api/rig-bridge/relay/command', { query: { session: id }, body });
   const take = () => call('GET', '/api/rig-bridge/relay/commands', { headers, query: { session: id } });
-  return { send, take };
+  return { send, take, headers };
 }
 
 describe('relay/command authentication', () => {
@@ -100,5 +100,25 @@ describe('relay/command authentication', () => {
       body: { type: 'setPTT' },
     });
     expect(r.code).toBe(404);
+  });
+});
+
+describe('relay/commands session binding', () => {
+  it("one bridge's credentials can't take another session's queued commands", async () => {
+    const a = await pairedSession('sessa00000000001');
+    const b = await pairedSession('sessb00000000002');
+    expect((await b.send({ type: 'setFreq', payload: { freq: 14074000 } })).code).toBe(200);
+
+    // A's own valid header, B's session in the URL — the reported attack
+    const stolen = await call('GET', '/api/rig-bridge/relay/commands', {
+      headers: a.headers,
+      query: { session: 'sessb00000000002' },
+    });
+    expect(stolen.code).toBe(400);
+
+    // B still gets its command
+    const got = await b.take();
+    expect(got.body.commands).toHaveLength(1);
+    expect(got.body.commands[0]).toMatchObject({ type: 'setFreq' });
   });
 });

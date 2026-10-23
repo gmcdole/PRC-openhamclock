@@ -56,7 +56,9 @@ function call(handler, { body = {}, query = {}, headers = {} } = {}) {
       return res;
     },
   };
-  const req = { body, query, headers, ip: '203.0.113.7', socket: {}, on() {} };
+  // Handlers run after requireRelayAuth, which sets the authenticated session
+  const relaySessionId = headers['x-relay-session'] || query.session || body.session;
+  const req = { body, query, headers, relaySessionId, ip: '203.0.113.7', socket: {}, on() {} };
   handler(req, res);
   return result;
 }

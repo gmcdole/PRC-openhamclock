@@ -1205,11 +1205,21 @@ function buildSetupHtml(version, firstRunToken = null) {
         statusEl.textContent = '❌ Enter the OpenHamClock Server URL first.';
         return;
       }
+      // The relay key is per session, so the server needs the session ID first
+      const session = document.getElementById('wsjtxSession').value.trim();
+      if (!session) {
+        statusEl.style.color = '#f87171';
+        statusEl.textContent =
+          '❌ Paste your Session ID first (OpenHamClock → Settings → Station → Rig Control → WSJT-X Relay).';
+        return;
+      }
       btn.disabled = true;
       statusEl.style.color = '#9ca3af';
       statusEl.textContent = 'Fetching credentials…';
       try {
-        const res = await fetch(url.replace(/[/]$/, '') + '/api/wsjtx/relay-credentials');
+        const res = await fetch(
+          url.replace(/[/]$/, '') + '/api/wsjtx/relay-credentials?session=' + encodeURIComponent(session),
+        );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           statusEl.style.color = '#f87171';
@@ -1219,8 +1229,7 @@ function buildSetupHtml(version, firstRunToken = null) {
         const { relayKey } = await res.json();
         document.getElementById('wsjtxKey').value = relayKey;
         statusEl.style.color = '#4ade80';
-        statusEl.textContent =
-          '✅ Relay key fetched. Now copy your Session ID from OpenHamClock → Settings → Station → Rig Control → WSJT-X Relay and paste it below.';
+        statusEl.textContent = '✅ Relay key fetched for this session. Save to apply.';
       } catch (e) {
         statusEl.style.color = '#f87171';
         statusEl.textContent = '❌ Could not reach ' + url + ' — is OpenHamClock running?';

@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { getCtyData, lookupCall } = require('../../src/server/ctydat.js');
 const { maidenheadToLatLon } = require('../utils/grid.js');
+const { relayTokenFor, isValidRelayToken, pickEvictableSession } = require('../utils/wsjtxRelayToken.js');
 
 module.exports = function (app, ctx) {
   const {
@@ -72,6 +73,7 @@ module.exports = function (app, ctx) {
   const wsjtxRelaySessions = {}; // sessionId -> { clients, decodes, qsos, wspr, relay, lastAccess }
   const WSJTX_SESSION_MAX_AGE = 60 * 60 * 1000; // 1 hour inactive expiry
   const WSJTX_MAX_SESSIONS = 50; // prevent memory abuse
+  const WSJTX_SESSION_EVICT_IDLE = 10 * 60 * 1000; // only idle sessions make room for new ones
 
   // Validate session IDs to prevent prototype pollution via __proto__/constructor/prototype
   function isValidSessionId(id) {
@@ -94,16 +96,11 @@ module.exports = function (app, ctx) {
     if (!wsjtxRelaySessions[sessionId]) {
       // Check session limit
       if (Object.keys(wsjtxRelaySessions).length >= WSJTX_MAX_SESSIONS) {
-        // Evict oldest session
-        let oldestId = null,
-          oldestTime = Infinity;
-        for (const [id, s] of Object.entries(wsjtxRelaySessions)) {
-          if (s.lastAccess < oldestTime) {
-            oldestTime = s.lastAccess;
-            oldestId = id;
-          }
-        }
-        if (oldestId) delete wsjtxRelaySessions[oldestId];
+        // Evict the oldest session only if it has gone idle; otherwise refuse
+        // the newcomer rather than push an active relay out.
+        const evictId = pickEvictableSession(wsjtxRelaySessions, Date.now(), WSJTX_SESSION_EVICT_IDLE);
+        if (!evictId) return null;
+        delete wsjtxRelaySessions[evictId];
       }
       wsjtxRelaySessions[sessionId] = {
         clients: {},
@@ -1063,12 +1060,6 @@ module.exports = function (app, ctx) {
       return res.status(503).json({ error: 'Relay not configured — set WSJTX_RELAY_KEY in .env' });
     }
 
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (token !== WSJTX_RELAY_KEY) {
-      return res.status(401).json({ error: 'Invalid relay key' });
-    }
-
     // Session ID is required for relay — isolates data per browser
     const sessionId = req.body.session || req.headers['x-relay-session'] || '';
     if (!sessionId) {
@@ -1078,7 +1069,22 @@ module.exports = function (app, ctx) {
       return res.status(400).json({ error: 'Invalid session ID' });
     }
 
+    // The token is per session (see utils/wsjtxRelayToken.js); the server-wide
+    // key itself is no longer accepted.
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!isValidRelayToken(WSJTX_RELAY_KEY, sessionId, token)) {
+      return res.status(401).json({
+        error:
+          'Invalid relay key for this session — re-download the relay from the OpenHamClock dashboard, ' +
+          'or press "Configure WSJT-X Relay" again in Settings',
+      });
+    }
+
     const session = getRelaySession(sessionId);
+    if (!session) {
+      return res.status(503).json({ error: 'Relay is at capacity — try again in a few minutes' });
+    }
 
     // Relay heartbeat — just registers the relay as alive for this session
     if (req.body && req.body.relay === true) {
@@ -1117,7 +1123,7 @@ module.exports = function (app, ctx) {
     res.json({ ok: true, processed, timestamp: Date.now() });
   });
 
-  // API endpoint: relay credentials — returns relay key so rig-bridge can auto-configure
+  // API endpoint: relay credentials — returns the session's relay token so rig-bridge can auto-configure
   // CORS is opened for localhost origins only so the rig-bridge setup UI (localhost:5555)
   // can fetch credentials without requiring the user to copy/paste them manually.
   function setLocalCors(req, res) {
@@ -1140,7 +1146,13 @@ module.exports = function (app, ctx) {
     if (!WSJTX_RELAY_KEY) {
       return res.status(503).json({ error: 'Relay not configured on this server — WSJTX_RELAY_KEY not set' });
     }
-    res.json({ relayKey: WSJTX_RELAY_KEY });
+    const sessionId = req.query.session || '';
+    if (!isValidSessionId(sessionId)) {
+      return res.status(400).json({
+        error: 'Session ID required — copy it from OpenHamClock → Settings → Station → Rig Control → WSJT-X Relay',
+      });
+    }
+    res.json({ relayKey: relayTokenFor(WSJTX_RELAY_KEY, sessionId), session: sessionId });
   });
 
   // API endpoint: serve raw relay.js (used by Windows .bat launcher)
@@ -1184,6 +1196,9 @@ module.exports = function (app, ctx) {
         error: 'Session ID required — download from the OpenHamClock dashboard',
       });
     }
+    if (!isValidSessionId(sessionId)) {
+      return res.status(400).json({ error: 'Invalid session ID' });
+    }
     // Get the multicast address if we were passed one
     const multicastAddress = req.query.multicast;
 
@@ -1209,7 +1224,8 @@ module.exports = function (app, ctx) {
     }
     const safeServerURL = sanitizeForShell(serverURL);
     const safeSessionId = sanitizeForShell(sessionId);
-    const safeRelayKey = sanitizeForShell(WSJTX_RELAY_KEY);
+    // The script carries this session's token, never the server-wide key
+    const safeRelayKey = relayTokenFor(WSJTX_RELAY_KEY, sessionId);
     const safeMulticastAddress = multicastAddress ? sanitizeForShell(multicastAddress) : '';
 
     if (platform === 'linux' || platform === 'mac') {

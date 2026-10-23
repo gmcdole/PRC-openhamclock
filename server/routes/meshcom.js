@@ -24,6 +24,9 @@
 
 module.exports = function (app, ctx) {
   const { logDebug, logInfo, logWarn, CONFIG } = ctx;
+  // Per-IP limits on the open ingest routes (see middleware ingestLimiter);
+  // the cloud-relay forwarder is exempt.
+  const ingest = ctx.ingestLimiter || (() => (req, res, next) => next());
 
   // Session data relayed by a paired Rig Bridge needs the relay read token,
   // exactly like the rig-bridge relay reads (server/routes/rig-bridge.js).
@@ -48,6 +51,27 @@ module.exports = function (app, ctx) {
   const msgAgeHoursRaw = parseFloat(process.env.MESHCOM_MESSAGE_MAX_AGE_HOURS);
   const MESSAGE_MAX_AGE_MS = (Number.isFinite(msgAgeHoursRaw) && msgAgeHoursRaw > 0 ? msgAgeHoursRaw : 8) * 3_600_000;
   const MAX_MESSAGES = 200;
+  // Caps so the open ingest routes can't grow memory without bound
+  const MAX_SESSIONS = 500;
+  const MAX_NODES_PER_SESSION = 2000;
+  const MAX_CALL_LEN = 16;
+  const MAX_TEXT_LEN = 300;
+  const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+  /** Shared checks for the ingest routes; sends the 4xx/503 and returns null on failure. */
+  function ingestSession(pkt, res) {
+    if (!pkt || typeof pkt.src !== 'string' || !pkt.src || pkt.src.length > MAX_CALL_LEN) {
+      res.status(400).json({ error: 'Missing or invalid src' });
+      return null;
+    }
+    if (typeof pkt.sessionId !== 'string' || !SESSION_ID_RE.test(pkt.sessionId)) {
+      res.status(400).json({ error: 'Missing or invalid sessionId' });
+      return null;
+    }
+    const s = getOrCreateSession(pkt.sessionId);
+    if (!s) res.status(503).json({ error: 'MeshCom relay is at capacity' });
+    return s;
+  }
   // Sessions expire after 90 min of no reads or writes — 30 min longer than
   // the relay session TTL so active sessions are never evicted mid-use.
   const SESSION_TTL_MS = parseEnvMinutes('MESHCOM_SESSION_TTL_MINUTES', 90) * 60_000;
@@ -64,6 +88,7 @@ module.exports = function (app, ctx) {
    */
   function getOrCreateSession(sessionId) {
     if (!sessions.has(sessionId)) {
+      if (sessions.size >= MAX_SESSIONS) return null;
       sessions.set(sessionId, {
         nodes: new Map(), // callsign → NodeObject
         messages: [], // bounded FIFO, arrival order
@@ -141,12 +166,10 @@ module.exports = function (app, ctx) {
   // ── Ingest: position ────────────────────────────────────────────────────────
   // Posted by the rig-bridge relay (server/routes/rig-bridge.js).
   // sessionId is included in the body by the relay forwarder.
-  app.post('/api/meshcom/local/pos', (req, res) => {
+  app.post('/api/meshcom/local/pos', ingest(120), (req, res) => {
     const pkt = req.body;
-    if (!pkt || !pkt.src) return res.status(400).json({ error: 'Missing src' });
-    if (!pkt.sessionId) return res.status(400).json({ error: 'Missing sessionId' });
-
-    const s = getOrCreateSession(pkt.sessionId);
+    const s = ingestSession(pkt, res);
+    if (!s) return;
     const call = String(pkt.src).toUpperCase().trim();
 
     // null-safe coordinate guard — 0 is a valid position (equator / prime meridian)
@@ -177,6 +200,9 @@ module.exports = function (app, ctx) {
     const wx = s.weather.get(call);
     if (wx) node.weather = wx;
 
+    if (!s.nodes.has(call) && s.nodes.size >= MAX_NODES_PER_SESSION) {
+      return res.status(503).json({ error: 'Too many MeshCom nodes in this session' });
+    }
     s.nodes.set(call, node);
     s.lastIngestTime = Date.now();
     logInfo(`[MeshCom] [${pkt.sessionId}] Position from ${call}: lat=${lat}, lon=${lon}, batt=${pkt.batt}`);
@@ -184,19 +210,19 @@ module.exports = function (app, ctx) {
   });
 
   // ── Ingest: text message ────────────────────────────────────────────────────
-  app.post('/api/meshcom/local/msg', (req, res) => {
+  app.post('/api/meshcom/local/msg', ingest(120), (req, res) => {
     const pkt = req.body;
-    if (!pkt || !pkt.src || !pkt.msg) return res.status(400).json({ error: 'Missing src or msg' });
-    if (!pkt.sessionId) return res.status(400).json({ error: 'Missing sessionId' });
-
-    const s = getOrCreateSession(pkt.sessionId);
+    if (!pkt || typeof pkt.msg !== 'string' || !pkt.msg) return res.status(400).json({ error: 'Missing src or msg' });
+    const s = ingestSession(pkt, res);
+    if (!s) return;
 
     s.messages.push({
       src: String(pkt.src).toUpperCase(),
-      dst: pkt.dst ? String(pkt.dst).toUpperCase() : '*',
-      text: pkt.msg,
-      msgId: pkt.msgId ?? null,
-      srcType: pkt.srcType ?? null,
+      dst: pkt.dst ? String(pkt.dst).slice(0, MAX_CALL_LEN).toUpperCase() : '*',
+      text: pkt.msg.slice(0, MAX_TEXT_LEN),
+      // Same type as the live SSE copy (the browser de-duplicates on msgId)
+      msgId: typeof pkt.msgId === 'number' ? pkt.msgId : typeof pkt.msgId === 'string' ? pkt.msgId.slice(0, 32) : null,
+      srcType: typeof pkt.srcType === 'string' ? pkt.srcType.slice(0, 16) : null,
       timestamp: pkt.timestamp ?? Date.now(),
     });
 
@@ -209,12 +235,10 @@ module.exports = function (app, ctx) {
   });
 
   // ── Ingest: telemetry / weather ─────────────────────────────────────────────
-  app.post('/api/meshcom/local/telem', (req, res) => {
+  app.post('/api/meshcom/local/telem', ingest(120), (req, res) => {
     const pkt = req.body;
-    if (!pkt || !pkt.src) return res.status(400).json({ error: 'Missing src' });
-    if (!pkt.sessionId) return res.status(400).json({ error: 'Missing sessionId' });
-
-    const s = getOrCreateSession(pkt.sessionId);
+    const s = ingestSession(pkt, res);
+    if (!s) return;
     const call = String(pkt.src).toUpperCase().trim();
     const ts = pkt.timestamp ?? Date.now();
 
@@ -229,6 +253,9 @@ module.exports = function (app, ctx) {
       timestamp: ts,
     };
 
+    if (!s.weather.has(call) && s.weather.size >= MAX_NODES_PER_SESSION) {
+      return res.status(503).json({ error: 'Too many MeshCom nodes in this session' });
+    }
     s.weather.set(call, wx);
 
     // Update weather on existing node too so the map popup has fresh data
@@ -319,9 +346,9 @@ module.exports = function (app, ctx) {
   // ── POST /api/meshcom/send ──────────────────────────────────────────────────
   // Proxies send request to rig-bridge plugin. Session is validated but not
   // used for routing — UDP send goes to the local mesh regardless.
-  app.post('/api/meshcom/send', async (req, res) => {
+  app.post('/api/meshcom/send', ingest(10), async (req, res) => {
     const { to, message, session } = req.body;
-    if (!message) return res.status(400).json({ error: 'Missing message' });
+    if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Missing message' });
     if (message.length > 150) return res.status(400).json({ error: 'Message exceeds 150 char MeshCom limit' });
 
     try {

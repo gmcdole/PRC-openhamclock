@@ -15,9 +15,28 @@ const path = require('path');
 const net = require('net');
 const fetch = require('node-fetch');
 const mqttLib = require('mqtt');
+const { validateCustomHost } = require('../utils/ssrf');
 
 module.exports = function meshtasticRoutes(app, ctx) {
-  const { logDebug, logInfo, logWarn, logErrorOnce, writeLimiter, ROOT_DIR } = ctx;
+  const { logDebug, logInfo, logWarn, logErrorOnce, writeLimiter, requireWriteAuth, ROOT_DIR } = ctx;
+  const IS_HOSTED = process.env.OHC_HOSTED === '1' || process.env.OHC_HOSTED === 'true';
+
+  // Proxy/direct modes configure ONE device shared by everyone using this
+  // server, so changing them (or sending through that device) is an admin
+  // action: it needs API_WRITE_KEY when one is set, and is refused outright on
+  // the multi-user hosted site, where a LAN device makes no sense. MQTT mode is
+  // per browser session and stays open.
+  function sharedWriteAllowed(req, res) {
+    if (IS_HOSTED) {
+      res.status(403).json({ error: 'Proxy and direct modes are not available on the hosted site — use MQTT' });
+      return false;
+    }
+    let ok = false;
+    requireWriteAuth(req, res, () => {
+      ok = true;
+    });
+    return ok;
+  }
 
   // ── Constants ──
   const CONFIG_FILE = path.join(ROOT_DIR, 'data', 'meshtastic-config.json');
@@ -601,7 +620,8 @@ module.exports = function meshtasticRoutes(app, ctx) {
         return res.status(500).json({ error: `MQTT publish failed: ${e.message}` });
       }
     }
-    // Proxy mode — forward to device
+    // Proxy mode — forward to the shared device
+    if (!sharedWriteAllowed(req, res)) return;
     try {
       const payload = { text: text.trim(), to: to || 0xffffffff, channel: channel || 0 };
       const sendRes = await fetch(`${config.host}/api/v1/sendtext`, {
@@ -649,6 +669,8 @@ module.exports = function meshtasticRoutes(app, ctx) {
         return res.json({ ok: true, enabled: false, message: 'MQTT session disconnected.' });
       }
       // Otherwise disable the shared proxy/direct config
+      if (!config.enabled) return res.json({ ok: true, enabled: false, message: 'Meshtastic disabled.' });
+      if (!sharedWriteAllowed(req, res)) return;
       stopPolling();
       config = { ...config, enabled: false, source: 'saved' };
       resetState();
@@ -662,6 +684,7 @@ module.exports = function meshtasticRoutes(app, ctx) {
 
     // ── Direct mode — just save the config, browser handles everything ──
     if (mode === 'direct') {
+      if (!sharedWriteAllowed(req, res)) return;
       // Disconnect any MQTT session for this client
       if (sessionId && mqttSessions.has(sessionId)) mqttSessionDisconnect(sessionId);
       stopPolling();
@@ -684,6 +707,20 @@ module.exports = function meshtasticRoutes(app, ctx) {
       if (!sessionId) {
         return res.status(400).json({ error: 'MQTT mode requires a session ID (x-mesh-session header)' });
       }
+      // On the hosted site the broker must be a public server, not this
+      // server's own network.
+      if (IS_HOSTED) {
+        let brokerHost;
+        try {
+          const u = new URL(mqttBroker.trim());
+          if (!['mqtt:', 'mqtts:', 'ws:', 'wss:'].includes(u.protocol)) throw new Error('protocol');
+          brokerHost = u.hostname;
+        } catch {
+          return res.status(400).json({ error: 'MQTT broker must be an mqtt://, mqtts://, ws:// or wss:// URL' });
+        }
+        const check = await validateCustomHost(brokerHost, { allowPrivate: false });
+        if (!check.ok) return res.status(400).json({ error: `MQTT broker rejected: ${check.reason}` });
+      }
 
       const sessionConfig = {
         mode: 'mqtt',
@@ -705,6 +742,7 @@ module.exports = function meshtasticRoutes(app, ctx) {
 
     // ── Proxy mode ──
     if (mode === 'proxy') {
+      if (!sharedWriteAllowed(req, res)) return;
       if (!host) {
         return res.status(400).json({ error: 'Device host URL is required' });
       }

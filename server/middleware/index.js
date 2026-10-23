@@ -2,6 +2,7 @@
  * Express middleware — security, rate limiting, compression, caching, endpoint monitoring.
  */
 
+const crypto = require('crypto');
 const cors = require('cors');
 const compression = require('compression');
 const helmet = require('helmet');
@@ -13,7 +14,7 @@ const { formatBytes, getClientIP } = require('../utils/helpers');
  * Apply all middleware to the Express app.
  * @param {object} app - Express app
  * @param {object} ctx - Shared context
- * @returns {{ endpointStats, writeLimiter, requireWriteAuth }} shared middleware refs
+ * @returns {{ endpointStats, writeLimiter, ingestLimiter, requireWriteAuth, INTERNAL_TOKEN }} shared middleware refs
  */
 function applyMiddleware(app, ctx) {
   const { CONFIG, PORT, TRUST_PROXY, API_WRITE_KEY, CORS_ORIGINS } = ctx;
@@ -77,6 +78,19 @@ function applyMiddleware(app, ctx) {
     }),
   );
 
+  // Requests the server makes to itself (the cloud-relay forwarder posting
+  // relayed APRS/MeshCom frames to the ingest routes) carry this per-process
+  // secret, so every relay user's traffic — all from localhost — isn't counted
+  // against one IP's rate limit.
+  const INTERNAL_TOKEN = crypto.randomBytes(32).toString('hex');
+  const internalBuf = Buffer.from(INTERNAL_TOKEN);
+  function isInternalRequest(req) {
+    const t = req.headers['x-ohc-internal'];
+    return (
+      typeof t === 'string' && t.length === INTERNAL_TOKEN.length && crypto.timingSafeEqual(Buffer.from(t), internalBuf)
+    );
+  }
+
   // Rate limiting
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -89,7 +103,7 @@ function applyMiddleware(app, ctx) {
     // Worker). Those run on shared egress IPs and exceed the 1800/min
     // window quickly even though each monitor only fires once a minute.
     // Health endpoints should always respond regardless of caller.
-    skip: (req) => req.path === '/health',
+    skip: (req) => req.path === '/health' || isInternalRequest(req),
 
     keyGenerator: getClientIP,
   });
@@ -104,6 +118,20 @@ function applyMiddleware(app, ctx) {
     message: { error: 'Too many requests' },
     keyGenerator: getClientIP,
   });
+
+  // Per-IP limits for the open data-ingest routes (APRS frames, MeshCom
+  // packets, net check-ins, field reports): they feed state every viewer
+  // shares, so one caller can't flood it. ingestLimiter(maxPerMinute).
+  const ingestLimiter = (max) =>
+    rateLimit({
+      windowMs: 60 * 1000,
+      max,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Too many requests' },
+      keyGenerator: getClientIP,
+      skip: isInternalRequest,
+    });
 
   // Body parser
   app.use(express.json({ limit: '1mb' }));
@@ -258,7 +286,7 @@ function applyMiddleware(app, ctx) {
     next();
   });
 
-  return { endpointStats, writeLimiter, requireWriteAuth };
+  return { endpointStats, writeLimiter, ingestLimiter, requireWriteAuth, INTERNAL_TOKEN };
 }
 
 module.exports = applyMiddleware;

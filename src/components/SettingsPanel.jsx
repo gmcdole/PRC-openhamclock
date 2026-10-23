@@ -749,8 +749,8 @@ export const SettingsPanel = ({
     setWsjtxRelayStatus('pushing');
     setWsjtxRelayMsg('');
     try {
-      // Fetch relay key from the local OHC server (same-origin, no CORS needed)
-      const credRes = await fetch('/api/wsjtx/relay-credentials');
+      // Fetch this session's relay token from the OHC server (same-origin, no CORS needed)
+      const credRes = await fetch(`/api/wsjtx/relay-credentials?session=${encodeURIComponent(wsjtxSessionId || '')}`);
       if (!credRes.ok) {
         const err = await credRes.json().catch(() => ({}));
         setWsjtxRelayStatus('error');

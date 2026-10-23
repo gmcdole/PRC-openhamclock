@@ -9,7 +9,7 @@
  *
  * Auth: mirrors POST /api/aprs/local — an open local-ingest endpoint intended
  * for the rig-bridge process on the same host (fire-and-forget POSTs with no
- * credentials), protected by the global API rate limiter and strict input
+ * credentials), protected by a per-IP ingest limit (30/min) and strict input
  * sanitization/caps rather than a key.
  *
  * Storage: in-memory, newest last, capped at 500 reports, with optional file
@@ -22,6 +22,7 @@ const path = require('path');
 
 module.exports = function (app, ctx) {
   const { ROOT_DIR, logInfo, logWarn, logDebug } = ctx;
+  const ingest = ctx.ingestLimiter || (() => (req, res, next) => next());
 
   const MAX_REPORTS = 500;
   const MAX_BATCH = 100; // per-POST cap
@@ -127,7 +128,7 @@ module.exports = function (app, ctx) {
   }
 
   // ─── POST /api/emcomm/field-reports — ingest from rig-bridge ─────────────
-  app.post('/api/emcomm/field-reports', (req, res) => {
+  app.post('/api/emcomm/field-reports', ingest(30), (req, res) => {
     const batch = req.body?.reports;
     if (!Array.isArray(batch)) {
       return res.status(400).json({ error: 'Missing reports array' });

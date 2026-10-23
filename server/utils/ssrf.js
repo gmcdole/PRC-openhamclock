@@ -22,6 +22,8 @@ function isPrivateIP(ip) {
     if (parts[0] === 192 && parts[1] === 168) return true; // 192.168.0.0/16
     if (parts[0] === 169 && parts[1] === 254) return true; // link-local
     if (parts[0] === 0) return true; // 0.0.0.0/8
+    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // 100.64.0.0/10 CGNAT
+    if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true; // 198.18.0.0/15 benchmarking
     if (parts[0] >= 224) return true; // multicast + reserved
   }
 
@@ -29,10 +31,9 @@ function isPrivateIP(ip) {
   if (
     lower === '::1' ||
     lower === '::' ||
-    lower.startsWith('fe80:') ||
-    lower.startsWith('fc00:') ||
-    lower.startsWith('fd00:') ||
-    lower.startsWith('ff00:') ||
+    /^fe[89ab][0-9a-f]:/.test(lower) || // fe80::/10 link-local
+    /^f[cd][0-9a-f]{2}:/.test(lower) || // fc00::/7 unique local
+    /^ff[0-9a-f]{2}:/.test(lower) || // ff00::/8 multicast
     lower.startsWith('::ffff:')
   ) {
     return true;
@@ -43,19 +44,27 @@ function isPrivateIP(ip) {
 /**
  * Validate a caller-supplied hostname for outbound connections.
  *
- * Localhost and bare IP literals (including RFC-1918 ranges) are always allowed —
- * OHC is self-hosted software where connecting to local services is the norm.
- * SSRF is a concern only for arbitrary DNS names that could resolve to internal infra
- * on multi-user cloud deployments.
+ * Self-hosted (the default, allowPrivate: true): localhost and bare IP literals
+ * (including RFC-1918 ranges) are allowed — connecting to local services is the norm.
+ *
+ * Multi-user hosted servers pass allowPrivate: false, which refuses localhost,
+ * private/reserved IP literals and any name that resolves to one (every address
+ * is checked, not just the first), so a caller can't make the server reach its
+ * own internal network.
  *
  * Returns { ok: true, resolvedIP } or { ok: false, reason }.
  */
-async function validateCustomHost(host) {
-  if (/^localhost$/i.test(host)) return { ok: true, resolvedIP: '127.0.0.1' };
+const PRIVATE_REFUSED = 'Local and private network addresses are not allowed on this server';
+
+async function validateCustomHost(host, { allowPrivate = true } = {}) {
+  if (/^localhost$/i.test(host)) {
+    return allowPrivate ? { ok: true, resolvedIP: '127.0.0.1' } : { ok: false, reason: PRIVATE_REFUSED };
+  }
 
   // Bare IPv4 literal — allow directly without DNS lookup
   const ipParts = host.split('.').map(Number);
   if (ipParts.length === 4 && ipParts.every((n) => n >= 0 && n <= 255)) {
+    if (!allowPrivate && isPrivateIP(host)) return { ok: false, reason: PRIVATE_REFUSED };
     return { ok: true, resolvedIP: host };
   }
 
@@ -76,6 +85,7 @@ async function validateCustomHost(host) {
   if (!addresses || addresses.length === 0) {
     return { ok: false, reason: 'Host did not resolve to any IPv4 address' };
   }
+  if (!allowPrivate && addresses.some(isPrivateIP)) return { ok: false, reason: PRIVATE_REFUSED };
 
   return { ok: true, resolvedIP: addresses[0] };
 }

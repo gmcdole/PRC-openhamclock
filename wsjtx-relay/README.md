@@ -62,7 +62,7 @@ On your OpenHamClock server, set the `WSJTX_RELAY_KEY` environment variable:
 WSJTX_RELAY_KEY=your-secret-key-here
 ```
 
-Pick any strong random string. This authenticates the relay so only your agent can push decodes to your server.
+Pick any strong random string. It never leaves the server: each relay gets a token derived from this key and its browser session (the downloaded script already contains it), and that token only works for its own session. Changing the key invalidates every relay token — re-download the relay afterwards.
 
 ## Configure WSJT-X
 

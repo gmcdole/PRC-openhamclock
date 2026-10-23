@@ -11,6 +11,8 @@ const { parseAprsMessage, messagesForStation, isDuplicateMessage } = require('..
 
 module.exports = function (app, ctx) {
   const { CONFIG, APP_VERSION, logDebug, logInfo, logWarn, logErrorOnce } = ctx;
+  // Per-IP limits on the open ingest routes below (see middleware ingestLimiter)
+  const ingest = ctx.ingestLimiter || (() => (req, res, next) => next());
 
   // Connects to APRS-IS network for real-time position tracking.
   // Read-only connection (passcode -1). Positions cached in memory.
@@ -30,6 +32,24 @@ module.exports = function (app, ctx) {
   const APRS_MAX_MESSAGES = 200;
   // Net operations: operator roster keyed by callsign
   const netRoster = new Map(); // callsign → { call, status, netName, checkinTime, lastHeard, location, resources }
+  // The roster is shared by everyone viewing this server: bound its size and
+  // the text that can be put into it.
+  const NET_ROSTER_MAX = 500;
+  const CALLSIGN_RE = /^[A-Z0-9/-]{1,12}$/i;
+  const clip = (v, n) => String(v).slice(0, n);
+  // Over NET_ROSTER_MAX, drop the longest-unheard entry
+  function trimRoster() {
+    if (netRoster.size <= NET_ROSTER_MAX) return;
+    let oldestKey = null;
+    let oldest = Infinity;
+    for (const [k, v] of netRoster) {
+      if ((v.lastHeard || 0) < oldest) {
+        oldest = v.lastHeard || 0;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) netRoster.delete(oldestKey);
+  }
   let aprsSocket = null;
   let aprsReconnectTimer = null;
   let aprsConnected = false;
@@ -178,6 +198,7 @@ module.exports = function (app, ctx) {
         tokens: station.tokens || [],
         source: msg.source || station.source || null,
       });
+      trimRoster();
       logInfo(`[APRS Net] ${msg.from} checked into ${netName}: ${status || '(no status)'}`);
     } else if (action === 'checkout') {
       netRoster.delete(msg.from);
@@ -413,15 +434,18 @@ module.exports = function (app, ctx) {
   });
 
   // REST endpoint: POST /api/aprs/net/checkin — manual check-in (for operators without APRS TX)
-  app.post('/api/aprs/net/checkin', (req, res) => {
+  app.post('/api/aprs/net/checkin', ingest(20), (req, res) => {
     const { callsign, netName, status } = req.body;
     if (!callsign || !netName) return res.status(400).json({ error: 'Missing callsign or netName' });
+    if (typeof callsign !== 'string' || !CALLSIGN_RE.test(callsign)) {
+      return res.status(400).json({ error: 'Invalid callsign' });
+    }
 
     const station = aprsStations.get(callsign.split('-')[0].toUpperCase());
     netRoster.set(callsign.toUpperCase(), {
       call: callsign.toUpperCase(),
-      netName,
-      status: status || 'Checked in',
+      netName: clip(netName, 32),
+      status: status ? clip(status, 64) : 'Checked in',
       checkinTime: Date.now(),
       lastHeard: Date.now(),
       lat: station?.lat ?? null,
@@ -429,13 +453,17 @@ module.exports = function (app, ctx) {
       tokens: station?.tokens || [],
       source: 'manual',
     });
+    trimRoster();
     res.json({ ok: true });
   });
 
   // REST endpoint: POST /api/aprs/net/checkout — manual check-out
-  app.post('/api/aprs/net/checkout', (req, res) => {
+  app.post('/api/aprs/net/checkout', ingest(20), (req, res) => {
     const { callsign } = req.body;
     if (!callsign) return res.status(400).json({ error: 'Missing callsign' });
+    if (typeof callsign !== 'string' || !CALLSIGN_RE.test(callsign)) {
+      return res.status(400).json({ error: 'Invalid callsign' });
+    }
     netRoster.delete(callsign.toUpperCase());
     res.json({ ok: true });
   });
@@ -488,9 +516,12 @@ module.exports = function (app, ctx) {
   });
 
   // REST endpoint: POST /api/aprs/message — send APRS message via rig-bridge
-  app.post('/api/aprs/message', async (req, res) => {
+  app.post('/api/aprs/message', ingest(10), async (req, res) => {
     const { to, message } = req.body;
     if (!to || !message) return res.status(400).json({ error: 'Missing to or message' });
+    if (typeof to !== 'string' || typeof message !== 'string' || !CALLSIGN_RE.test(to.trim())) {
+      return res.status(400).json({ error: 'Invalid addressee or message' });
+    }
     if (message.length > 67) return res.status(400).json({ error: 'Message exceeds 67 char APRS limit' });
 
     const recordSent = () => {
@@ -610,7 +641,18 @@ module.exports = function (app, ctx) {
     return false;
   }
 
-  app.post('/api/aprs/local', (req, res) => {
+  // Frames per request, and the field sizes a real AX.25 frame can have
+  const LOCAL_MAX_PACKETS = 200;
+  const LOCAL_MAX_INFO = 512;
+  const LOCAL_MAX_CALL = 16;
+  // A frame's own timestamp is trusted only if it is recent: a future date
+  // would keep a station on the map forever and win over real updates.
+  function frameTime(ts) {
+    const now = Date.now();
+    return typeof ts === 'number' && ts <= now + 60000 && ts >= now - 60 * 60000 ? Math.min(ts, now) : now;
+  }
+
+  app.post('/api/aprs/local', ingest(120), (req, res) => {
     const packets = req.body.packets;
     if (!Array.isArray(packets)) {
       return res.status(400).json({ error: 'Missing packets array' });
@@ -618,8 +660,13 @@ module.exports = function (app, ctx) {
 
     let added = 0;
     let duplicates = 0;
-    for (const pkt of packets) {
-      if (!pkt.source || !pkt.info) continue;
+    for (const pkt of packets.slice(0, LOCAL_MAX_PACKETS)) {
+      if (!pkt || typeof pkt.source !== 'string' || typeof pkt.info !== 'string') continue;
+      if (!pkt.source || !pkt.info || pkt.source.length > LOCAL_MAX_CALL || pkt.info.length > LOCAL_MAX_INFO) continue;
+      if (pkt.destination != null && (typeof pkt.destination !== 'string' || pkt.destination.length > LOCAL_MAX_CALL)) {
+        continue;
+      }
+      pkt.timestamp = frameTime(pkt.timestamp);
       if (isDuplicateLocalFrame(pkt)) {
         duplicates++;
         continue;

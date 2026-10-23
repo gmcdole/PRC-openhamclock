@@ -222,6 +222,15 @@ module.exports = function (app, ctx) {
     // and the rate-limit key derivation below.
     const rawSessionId = req.headers['x-relay-session'] || req.query.session || req.body?.session;
     const sessionId = typeof rawSessionId === 'string' ? rawSessionId : undefined;
+    // Routes act on req.relaySessionId only. A request that names a different
+    // session anywhere else (header vs ?session= vs body) is refused, so a
+    // bridge's own credentials can't be used to read another session's queue.
+    const named = [req.headers['x-relay-session'], req.query.session, req.body?.session].filter(
+      (v) => v !== undefined && v !== '',
+    );
+    if (named.some((v) => v !== sessionId)) {
+      return res.status(400).json({ error: 'Conflicting relay session IDs in the request' });
+    }
     const rawAuth = req.headers.authorization;
     const token = (typeof rawAuth === 'string' ? rawAuth : '').replace(/^Bearer\s+/i, '');
     const entry = sessionId ? relayIssuedTokens.get(sessionId) : undefined;
@@ -242,6 +251,7 @@ module.exports = function (app, ctx) {
       });
     }
     entry.lastUsed = Date.now();
+    req.relaySessionId = sessionId;
     // A paired bridge registers the hash of its relay read token on every
     // authenticated request (header) or state push (body); keep it, persisted,
     // so this session's reads stay protected across server restarts.
@@ -369,7 +379,7 @@ module.exports = function (app, ctx) {
   // ─── Cloud Relay: State Push (rig-bridge → server) ────────────────────
   app.post('/api/rig-bridge/relay/state', requireRelayAuth, (req, res) => {
     try {
-      const sessionId = req.headers['x-relay-session'] || req.body.session;
+      const sessionId = req.relaySessionId;
       if (!sessionId) return res.status(400).json({ error: 'Missing session ID' });
 
       const session = getRelaySession(sessionId);
@@ -420,7 +430,8 @@ module.exports = function (app, ctx) {
           ctx
             .fetch(`http://localhost:${ctx.PORT}/api/aprs/local`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              // Internal: exempt from the per-IP limits on the ingest routes
+              headers: { 'Content-Type': 'application/json', 'X-OHC-Internal': ctx.INTERNAL_TOKEN || '' },
               body: JSON.stringify({ packets: req.body.aprsPackets }),
             })
             .catch(() => {});
@@ -442,7 +453,8 @@ module.exports = function (app, ctx) {
           ctx
             .fetch(`http://localhost:${ctx.PORT}/api/meshcom/local/${subtype}`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              // Internal: exempt from the per-IP limits on the ingest routes
+              headers: { 'Content-Type': 'application/json', 'X-OHC-Internal': ctx.INTERNAL_TOKEN || '' },
               body: JSON.stringify({ ...pkt, sessionId }),
             })
             .then((r) => {
@@ -674,7 +686,7 @@ module.exports = function (app, ctx) {
   // this to receive commands within ~network RTT instead of up to pollInterval.
   app.get('/api/rig-bridge/relay/commands', requireRelayAuth, (req, res) => {
     try {
-      const sessionId = req.query.session;
+      const sessionId = req.relaySessionId;
       if (!sessionId) {
         return res.json({ commands: [] });
       }

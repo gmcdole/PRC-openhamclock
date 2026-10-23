@@ -94,7 +94,7 @@ const app = express();
 
 // ── Apply middleware (security, rate limiting, compression, caching, monitoring) ──
 const applyMiddleware = require('./server/middleware');
-const { endpointStats, writeLimiter, requireWriteAuth } = applyMiddleware(app, {
+const { endpointStats, writeLimiter, ingestLimiter, requireWriteAuth, INTERNAL_TOKEN } = applyMiddleware(app, {
   CONFIG,
   PORT,
   TRUST_PROXY: config.TRUST_PROXY,
@@ -150,6 +150,8 @@ const ctx = {
   upstream,
   requireWriteAuth,
   writeLimiter,
+  ingestLimiter,
+  INTERNAL_TOKEN,
   endpointStats,
   maintainCache,
 };
