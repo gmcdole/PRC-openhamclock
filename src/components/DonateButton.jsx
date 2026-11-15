@@ -1,12 +1,12 @@
 /**
  * DonateButton — single "Support Us" button that opens a modal
- * with Square, PayPal, and merch store links.
+ * with Square, PayPal, and Patriot Radio Club store links.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 
 const SQUARE_URL = 'https://square.link/u/H9HA3PjU';
 const PAYPAL_URL = 'https://www.paypal.com/donate/?hosted_button_id=XSXCMP8NMGL5G';
-const MERCH_URL = 'https://openhamclock.printify.me';
+const STORE_URL = 'https://radioclub.store/';
 
 export default function DonateButton({ compact = false, fontSize = '12px', padding = '6px 10px', tabIndex }) {
   const [open, setOpen] = useState(false);
@@ -188,13 +188,13 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                     letterSpacing: '0.5px',
                   }}
                 >
-                  Support the OpenHamClock software
+                  Patriot Radio Club Store
                 </div>
                 <a
-                  href={MERCH_URL}
+                  href={STORE_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label="OpenHamClock Merch — supports the open-source OpenHamClock project, not the Patriot Radio Club (opens in new tab)"
+                  aria-label="Visit the Club Store — club shirts, hoodies, hats and mugs (opens in new tab)"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -214,9 +214,9 @@ export default function DonateButton({ compact = false, fontSize = '12px', paddi
                 >
                   <span style={{ fontSize: '22px' }}>🛍️</span>
                   <div>
-                    <div>OpenHamClock Merch</div>
+                    <div>Visit the Club Store</div>
                     <div style={{ fontSize: '11px', fontWeight: '400', color: 'var(--text-muted, #aaa)' }}>
-                      Supports the open-source OpenHamClock project
+                      Club shirts, hoodies, hats and mugs
                     </div>
                   </div>
                 </a>
