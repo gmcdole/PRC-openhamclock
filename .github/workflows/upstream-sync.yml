@@ -176,6 +176,7 @@ jobs:
           need src/components/WorldMap.jsx "storedSettings.mapProjection || 'globe3d'" 'globe is the default map'
           need src/components/Globe3D.jsx 'kickIdleTimer(userMovedRef.current ? AUTOROTATE_IDLE_MS : 0)' 'globe spins on first load'
           need server/routes/config-routes.js "const tz = process.env.TZ || '';" 'visitor local time zone'
+          need src/components/DonateButton.jsx 'https://radioclub.store/' 'club store link (not upstream merch)'
           } > "$RUNNER_TEMP/prc-check.txt"
           cat "$RUNNER_TEMP/prc-check.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -q '^MISSING' "$RUNNER_TEMP/prc-check.txt"; then
@@ -204,7 +205,7 @@ jobs:
       - name: Confirm PRC changes made it into the built site
         if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
         run: |
-          for t in 'square.link/u/H9HA3PjU' 'XSXCMP8NMGL5G' 'Support the Patriot Radio Club'; do
+          for t in 'square.link/u/H9HA3PjU' 'XSXCMP8NMGL5G' 'Support the Patriot Radio Club' 'radioclub.store/'; do
             grep -rqF -- "$t" dist/ || { echo "Built site is missing: $t - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
           done
           grep -qF 'https://openhamclock.patriotradio.club/' dist/index.html || { echo "Built index.html lost our tags - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
