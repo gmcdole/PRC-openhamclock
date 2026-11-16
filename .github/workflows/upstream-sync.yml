@@ -163,20 +163,17 @@ jobs:
       - name: Confirm every PRC change is still in the source
         if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
         run: |
-          need() { # file, fixed text, what it is
-            if grep -qF -- "$2" "$1"; then echo "OK      $3"; else echo "MISSING $3 ($1)"; fi
-          }
+          f=.github/prc-checks/source-markers.txt
+          n=$(grep -cvE '^[[:space:]]*(#|$)' "$f" 2>/dev/null || true)
+          if [ "${n:-0}" -lt 10 ]; then
+            echo "Marker list $f is missing or has fewer than 10 markers - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           {
-          need src/components/DonateButton.jsx 'https://square.link/u/H9HA3PjU' 'Square donate link'
-          need src/components/DonateButton.jsx 'XSXCMP8NMGL5G' 'PRC PayPal donate link'
-          need src/components/DonateButton.jsx 'Support the Patriot Radio Club' 'Support window title'
-          need index.html 'https://openhamclock.patriotradio.club/' 'canonical / SEO tags'
-          need public/robots.txt 'openhamclock.patriotradio.club' 'robots.txt points to our site'
-          need public/sitemap.xml 'openhamclock.patriotradio.club' 'sitemap points to our site'
-          need src/components/WorldMap.jsx "storedSettings.mapProjection || 'globe3d'" 'globe is the default map'
-          need src/components/Globe3D.jsx 'kickIdleTimer(userMovedRef.current ? AUTOROTATE_IDLE_MS : 0)' 'globe spins on first load'
-          need server/routes/config-routes.js "const tz = process.env.TZ || '';" 'visitor local time zone'
-          need src/components/DonateButton.jsx 'https://radioclub.store/' 'club store link (not upstream merch)'
+          while IFS=$'\t' read -r file text what; do
+            case "$file" in ''|'#'*) continue ;; esac
+            if grep -qF -- "$text" "$file"; then echo "OK      $what"; else echo "MISSING $what ($file)"; fi
+          done < "$f"
           } > "$RUNNER_TEMP/prc-check.txt"
           cat "$RUNNER_TEMP/prc-check.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -q '^MISSING' "$RUNNER_TEMP/prc-check.txt"; then
@@ -205,9 +202,12 @@ jobs:
       - name: Confirm PRC changes made it into the built site
         if: steps.check.outputs.behind != '0' || inputs.run_checks_anyway
         run: |
-          for t in 'square.link/u/H9HA3PjU' 'XSXCMP8NMGL5G' 'Support the Patriot Radio Club' 'radioclub.store/'; do
+          f=.github/prc-checks/built-site-markers.txt
+          [ "$(grep -cvE '^[[:space:]]*(#|$)' "$f" 2>/dev/null || true)" -ge 1 ] || { echo "Built-site marker list $f is missing or empty - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          while IFS= read -r t; do
+            case "$t" in ''|'#'*) continue ;; esac
             grep -rqF -- "$t" dist/ || { echo "Built site is missing: $t - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
-          done
+          done < "$f"
           grep -qF 'https://openhamclock.patriotradio.club/' dist/index.html || { echo "Built index.html lost our tags - nothing pushed." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
           echo "Built site still has the PRC donate options and tags." | tee -a "$GITHUB_STEP_SUMMARY"
 
