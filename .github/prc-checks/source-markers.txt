@@ -1,0 +1,14 @@
+# PRC change markers: one per line, three TAB-separated fields: file <TAB> exact text that must be present <TAB> description.
+# The nightly upstream-sync workflow reads this file. To add or change a marker, edit THIS file, not the workflow:
+# editing the workflow file itself makes GitHub hold the next run for manual approval.
+# Lines starting with # are ignored. Never leave this file empty: the workflow refuses to push if it is.
+src/components/DonateButton.jsx	https://square.link/u/H9HA3PjU	Square donate link
+src/components/DonateButton.jsx	XSXCMP8NMGL5G	PRC PayPal donate link
+src/components/DonateButton.jsx	Support the Patriot Radio Club	Support window title
+index.html	https://openhamclock.patriotradio.club/	canonical / SEO tags
+public/robots.txt	openhamclock.patriotradio.club	robots.txt points to our site
+public/sitemap.xml	openhamclock.patriotradio.club	sitemap points to our site
+src/components/WorldMap.jsx	storedSettings.mapProjection || 'globe3d'	globe is the default map
+src/components/Globe3D.jsx	kickIdleTimer(userMovedRef.current ? AUTOROTATE_IDLE_MS : 0)	globe spins on first load
+server/routes/config-routes.js	const tz = process.env.TZ || '';	visitor local time zone
+src/components/DonateButton.jsx	https://radioclub.store/	club store link (not upstream merch)
