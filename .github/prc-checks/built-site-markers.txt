@@ -1,0 +1,6 @@
+# Text that must appear somewhere in the built site (dist/), one string per line. Lines starting with # are ignored.
+# Edit THIS file, not the workflow, to add or change a built-site marker.
+square.link/u/H9HA3PjU
+XSXCMP8NMGL5G
+Support the Patriot Radio Club
+radioclub.store/
