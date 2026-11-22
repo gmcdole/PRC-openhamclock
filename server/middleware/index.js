@@ -9,6 +9,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const express = require('express');
 const { getClientIP, setTrustCloudflare } = require('../utils/helpers');
+const { allowEmbeddableImages } = require('./embedImages');
 
 /**
  * Apply all middleware to the Express app.
@@ -45,6 +46,9 @@ function applyMiddleware(app, ctx) {
       crossOriginEmbedderPolicy: false, // Required for cross-origin tile loading
     }),
   );
+  // After Helmet, so public <img> embeds (QRZ, README) are not stuck on
+  // Cross-Origin-Resource-Policy: same-origin. See embedImages.js.
+  app.use(allowEmbeddableImages);
 
   // Permissions-Policy
   app.use((req, res, next) => {
@@ -177,7 +181,7 @@ function applyMiddleware(app, ctx) {
       cacheDuration = 3600;
     } else if (p.includes('/contests') || p.includes('/dxpeditions')) {
       cacheDuration = 1800;
-    } else if (p.includes('/solar-indices') || p.includes('/noaa')) {
+    } else if (p.includes('/solar-indices') || p.includes('/noaa') || p.includes('/badge')) {
       cacheDuration = 300;
     } else if (p.includes('/propagation/heatmap')) {
       cacheDuration = 900; // 15 min — propagation changes slowly, heavy computation
